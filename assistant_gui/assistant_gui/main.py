@@ -1,3 +1,11 @@
+"""OmniMate GUI 애플리케이션 메인 진입점.
+
+역할:
+- UI 초기화 및 페이지 라우팅
+- 음성/날씨/배터리 엔진 연결
+- ROS 브리지 상태 반영
+"""
+
 import re
 import sys
 import os
