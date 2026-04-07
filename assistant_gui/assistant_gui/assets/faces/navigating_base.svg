@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g id="ears">
+    <rect x="36" y="206" width="40" height="100" rx="20" fill="#A3C9F0" />
+    <rect x="436" y="206" width="40" height="100" rx="20" fill="#A3C9F0" />
+  </g>
+  <g id="face-base">
+    <rect x="56" y="86" width="400" height="340" rx="140" ry="140" fill="#F4F9FF" stroke="#4A90E2" stroke-width="16" />
+    <rect x="76" y="106" width="360" height="300" rx="120" ry="120" fill="none" stroke="#FFFFFF" stroke-width="12" opacity="0.8" />
+  </g>
+  <path d="M 80 200 L 110 200 M 70 230 L 100 230" fill="none" stroke="#A3C9F0" stroke-width="6" stroke-linecap="round" />
+  <path d="M 432 200 L 402 200 M 442 230 L 412 230" fill="none" stroke="#A3C9F0" stroke-width="6" stroke-linecap="round" />
+  <g id="cheeks">
+    <ellipse cx="130" cy="270" rx="32" ry="18" fill="#FF8DA1" opacity="0.35" />
+    <ellipse cx="382" cy="270" rx="32" ry="18" fill="#FF8DA1" opacity="0.35" />
+  </g>
+  <g id="eyes">
+    <rect x="146" y="166" width="48" height="76" rx="24" ry="24" fill="#2A3B4C" />
+    <circle cx="162" cy="186" r="10" fill="#FFFFFF" />
+    <rect x="318" y="166" width="48" height="76" rx="24" ry="24" fill="#2A3B4C" />
+    <circle cx="334" cy="186" r="10" fill="#FFFFFF" />
+  </g>
+  <g id="mouth">
+    <path d="M 200 275 C 200 275 256 265 312 275 C 312 275 256 345 200 275 Z" fill="#FF8DA1" stroke="#2A3B4C" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+</svg>

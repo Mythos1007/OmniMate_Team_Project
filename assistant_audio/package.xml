@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>assistant_audio</name>
+  <version>0.1.0</version>
+  <description>Wake word, speech-to-text, and text-to-speech pipeline for the assistant robot.</description>
+  <maintainer email="todo@example.com">mythos</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>assistant_interfaces</depend>
+  <depend>assistant_commands</depend>
+  <depend>builtin_interfaces</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

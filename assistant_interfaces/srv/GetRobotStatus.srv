@@ -1,0 +1,4 @@
+---
+float32 battery_percent
+string location_name
+string robot_mode

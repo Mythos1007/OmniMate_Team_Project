@@ -1,0 +1,8 @@
+missions:
+  default_priorities:
+    delivery: 200
+    call: 180
+    alarm: 300
+    medication: 320
+    weather_tts: 50
+    return_to_base: 1000

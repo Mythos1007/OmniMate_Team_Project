@@ -1,0 +1,5 @@
+schedules:
+  - enabled: false
+    mission_type: alarm
+    target_location: 회의실 A
+    cron: "0 9 * * *"

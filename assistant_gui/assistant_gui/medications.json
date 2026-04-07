@@ -1,0 +1,17 @@
+{
+    "last_run_date": "2026-04-07",
+    "meds": [
+        {
+            "time": "10:18",
+            "name": "123",
+            "pill": "123",
+            "active": false
+        },
+        {
+            "time": "19:40",
+            "name": "냥냥냥",
+            "pill": "페니실린",
+            "active": false
+        }
+    ]
+}

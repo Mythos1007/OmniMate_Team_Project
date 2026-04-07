@@ -1,0 +1,5 @@
+tts:
+  provider: dev
+  profile: demo
+  voice_style: calm
+  interrupt_priority: high

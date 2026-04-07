@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g id="ears">
+    <rect x="36" y="206" width="40" height="100" rx="20" fill="#A3C9F0" />
+    <rect x="436" y="206" width="40" height="100" rx="20" fill="#A3C9F0" />
+  </g>
+  <g id="face-base">
+    <rect x="56" y="86" width="400" height="340" rx="140" ry="140" fill="#F4F9FF" stroke="#4A90E2" stroke-width="16" />
+    <rect x="76" y="106" width="360" height="300" rx="120" ry="120" fill="none" stroke="#FFFFFF" stroke-width="12" opacity="0.8" />
+  </g>
+  <path d="M 100 130 L 120 150 M 412 130 L 392 150" fill="none" stroke="#2A3B4C" stroke-width="8" stroke-linecap="round" />
+  <g id="eyes">
+    <circle cx="170" cy="204" r="28" fill="#2A3B4C" />
+    <circle cx="176" cy="198" r="8" fill="#FFFFFF" />
+    <circle cx="342" cy="204" r="28" fill="#2A3B4C" />
+    <circle cx="348" cy="198" r="8" fill="#FFFFFF" />
+  </g>
+  <g id="mouth">
+    <ellipse cx="256" cy="290" rx="20" ry="26" fill="#2A3B4C" />
+  </g>
+</svg>

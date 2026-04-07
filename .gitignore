@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Test/cache
+.pytest_cache/
+.mypy_cache/
+.coverage
+
+# Virtual env
+.venv/
+venv/
+
+# ROS/colcon build artifacts
+build/
+install/
+log/
+
+# Local settings and secrets
+.env
+*.secrets.json
+assistant_gui/assistant_gui/engines/weather_secrets.json
+assistant_audio/assistant_audio/tts_secrets.json
+
+# OS/editor
+.DS_Store
+.vscode/

@@ -1,0 +1,46 @@
+wake_word_node:
+  ros__parameters:
+    wake_word_enabled: true
+    # 인식할 wake word 목록 (콤마 구분, 소문자)
+    wake_words: "omni,옴니,옴니야"
+    wake_word_text: ""        # legacy — wake_words 로 대체됨
+    mock_mode: false
+    mock_trigger_period_sec: 0.0
+
+stt_node:
+  ros__parameters:
+    mock_mode: false
+    stt_backend: faster_whisper
+    stt_language: ko
+    whisper_model_size: small
+    whisper_compute_type: int8
+    whisper_device: cpu
+    whisper_beam_size: 5
+    mock_transcript_text: "회의실로 안내해줘"
+    mock_confidence: 0.92
+    transcription_delay_sec: 1.5
+    record_duration_sec: 4.0
+    sample_rate_hz: 16000
+    audio_channels: 1
+    audio_device: default
+    acoustic_model_dir: /usr/share/pocketsphinx/model/en-us/en-us
+    language_model_path: /usr/share/pocketsphinx/model/en-us/en-us.lm.bin
+    dictionary_path: /usr/share/pocketsphinx/model/en-us/cmudict-en-us.dict
+
+tts_node:
+  ros__parameters:
+    tts_backend: edge_tts
+    language: ko
+    voice_name: ko-KR-SunHiNeural
+    fallback_voice_name: female1
+    playback_command: gst-play-1.0
+    elevenlabs_api_key: ""
+    elevenlabs_voice_id: ""
+    elevenlabs_model_id: eleven_multilingual_v2
+    elevenlabs_output_format: mp3_44100_128
+    cartesia_api_key: ""
+    cartesia_voice_id: ""
+    cartesia_model_id: sonic-3
+    cartesia_output_container: wav
+    cartesia_output_encoding: pcm_f32le
+    cartesia_sample_rate: 44100

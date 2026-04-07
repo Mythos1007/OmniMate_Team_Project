@@ -1,0 +1,7 @@
+string place_name
+---
+bool success
+string message
+---
+string current_phase
+float32 progress

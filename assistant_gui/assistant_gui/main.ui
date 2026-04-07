@@ -1,0 +1,370 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>OmniMateMainWindow</class>
+ <widget class="QMainWindow" name="OmniMateMainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1024</width>
+    <height>600</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>OmniMate - AI Robot Dashboard</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="main_layout">
+    <property name="spacing">
+     <number>0</number>
+    </property>
+    <property name="leftMargin">
+     <number>0</number>
+    </property>
+    <property name="topMargin">
+     <number>0</number>
+    </property>
+    <property name="rightMargin">
+     <number>0</number>
+    </property>
+    <property name="bottomMargin">
+     <number>0</number>
+    </property>
+    <item>
+     <widget class="QFrame" name="hdr_frame">
+      <property name="minimumSize">
+       <size>
+        <width>0</width>
+        <height>60</height>
+       </size>
+      </property>
+      <property name="maximumSize">
+       <size>
+        <width>16777215</width>
+        <height>60</height>
+       </size>
+      </property>
+      <property name="frameShape">
+       <enum>QFrame::NoFrame</enum>
+      </property>
+      <layout class="QHBoxLayout" name="hdr_layout">
+       <property name="leftMargin">
+        <number>20</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>20</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="QPushButton" name="hdr_home_btn">
+         <property name="text">
+          <string>🏠 Home</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="hdr_sleep_btn">
+         <property name="text">
+          <string>💤 취침모드</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="hdr_voiceState_Lbl">
+         <property name="text">
+          <string>🎤️ 호출어 대기 중...</string>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="hdr_status_layout">
+         <item>
+          <widget class="QLabel" name="status_conn_lbl">
+           <property name="text">
+            <string>📶 연결됨</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="status_mic_lbl">
+           <property name="text">
+            <string>🎙️ 켜짐</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="status_battery_lbl">
+           <property name="text">
+            <string>🔋 82%</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QStackedWidget" name="stacked_widget">
+      <property name="currentIndex">
+       <number>1</number>
+      </property>
+      <widget class="QWidget" name="page_face">
+       <layout class="QVBoxLayout" name="face_layout">
+        <item>
+         <spacer name="face_spacer_top">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="face_label">
+          <property name="text">
+           <string>🙂</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="face_hint">
+          <property name="text">
+           <string>화면을 터치하거나 이름을 불러주세요</string>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignCenter</set>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="face_spacer_bottom">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_home">
+       <layout class="QHBoxLayout" name="home_layout">
+        <property name="leftMargin">
+         <number>20</number>
+        </property>
+        <property name="topMargin">
+         <number>20</number>
+        </property>
+        <property name="rightMargin">
+         <number>20</number>
+        </property>
+        <property name="bottomMargin">
+         <number>20</number>
+        </property>
+        <item>
+         <widget class="QFrame" name="map_frame">
+          <layout class="QVBoxLayout" name="map_layout">
+           <item>
+            <widget class="QLabel" name="map_placeholder_lbl">
+             <property name="text">
+              <string>지도 영역
+(현재 위치 및 경로 표시)</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="dest_layout">
+             <item><widget class="QPushButton" name="dest_lobby_btn"><property name="text"><string>로비</string></property></widget></item>
+             <item><widget class="QPushButton" name="dest_meeting_btn"><property name="text"><string>회의실 A</string></property></widget></item>
+             <item><widget class="QPushButton" name="dest_pantry_btn"><property name="text"><string>탕비실</string></property></widget></item>
+             <item><widget class="QPushButton" name="dest_stop_btn"><property name="text"><string>안내 중지</string></property></widget></item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="home_right_layout">
+          <item>
+           <widget class="QPushButton" name="weather_card_btn">
+            <property name="text">
+             <string>날씨 카드</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QFrame" name="status_frame">
+            <layout class="QVBoxLayout" name="status_layout">
+             <item><widget class="QLabel" name="status_title_lbl"><property name="text"><string>현재 상태</string></property></widget></item>
+             <item><widget class="QLabel" name="status_main_lbl"><property name="text"><string>회의실 A로 안내 중</string></property></widget></item>
+             <item><widget class="QLabel" name="status_sub_lbl"><property name="text"><string>목적지까지 15m 남았습니다.</string></property></widget></item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QFrame" name="menu_frame">
+            <layout class="QGridLayout" name="menu_grid">
+             <item row="0" column="0"><widget class="QPushButton" name="menu_schedule_btn"><property name="text"><string>📅 일정</string></property></widget></item>
+             <item row="0" column="1"><widget class="QPushButton" name="menu_alarm_btn"><property name="text"><string>⏰ 알람</string></property></widget></item>
+             <item row="1" column="0"><widget class="QPushButton" name="menu_med_btn"><property name="text"><string>💊 복약 확인</string></property></widget></item>
+             <item row="1" column="1"><widget class="QPushButton" name="menu_mail_btn"><property name="text"><string>✉️ 우편 전달</string></property></widget></item>
+             <item row="2" column="0"><widget class="QPushButton" name="menu_settings_btn"><property name="text"><string>⚙️ 설정</string></property></widget></item>
+             <item row="2" column="1"><widget class="QPushButton" name="menu_voice_btn"><property name="text"><string>🎤 음성 테스트</string></property></widget></item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_schedule">
+       <layout class="QHBoxLayout" name="schedule_layout">
+        <item>
+         <widget class="QCalendarWidget" name="schedule_calendar"/>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="schedule_detail_layout">
+          <item><widget class="QLabel" name="schedule_date_title"><property name="text"><string>선택된 날짜 일정</string></property></widget></item>
+          <item><widget class="QListWidget" name="schedule_list"/></item>
+          <item><widget class="QPushButton" name="schedule_add_btn"><property name="text"><string>새 일정 추가</string></property></widget></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_schedule_add">
+       <layout class="QVBoxLayout" name="schedule_add_layout">
+        <item><widget class="QLabel" name="schedule_add_title"><property name="text"><string>새 일정 등록</string></property></widget></item>
+        <item>
+         <layout class="QFormLayout" name="schedule_form_layout">
+          <item row="0" column="0"><widget class="QLabel" name="schedule_date_lbl"><property name="text"><string>날짜:</string></property></widget></item>
+          <item row="0" column="1"><widget class="QDateEdit" name="schedule_date_edit"/></item>
+          <item row="1" column="0"><widget class="QLabel" name="schedule_time_lbl"><property name="text"><string>시간:</string></property></widget></item>
+          <item row="1" column="1"><widget class="QTimeEdit" name="schedule_time_edit"/></item>
+          <item row="2" column="0"><widget class="QLabel" name="schedule_content_lbl"><property name="text"><string>내용:</string></property></widget></item>
+          <item row="2" column="1"><widget class="QLineEdit" name="schedule_content_edit"/></item>
+          <item row="3" column="0"><widget class="QLabel" name="schedule_place_lbl"><property name="text"><string>장소:</string></property></widget></item>
+          <item row="3" column="1"><widget class="QLineEdit" name="schedule_place_edit"/></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_alarm">
+       <layout class="QVBoxLayout" name="alarm_layout">
+        <item><widget class="QLabel" name="alarm_title"><property name="text"><string>알람 목록</string></property></widget></item>
+        <item><widget class="QListWidget" name="alarm_list"/></item>
+        <item><widget class="QPushButton" name="alarm_add_btn"><property name="text"><string>+ 새 알람 추가</string></property></widget></item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_alarm_add">
+       <layout class="QVBoxLayout" name="alarm_add_layout">
+        <item><widget class="QLabel" name="alarm_add_title"><property name="text"><string>알람 설정</string></property></widget></item>
+        <item>
+         <layout class="QFormLayout" name="alarm_form_layout">
+          <item row="0" column="0"><widget class="QLabel" name="alarm_time_lbl"><property name="text"><string>시간:</string></property></widget></item>
+          <item row="0" column="1"><widget class="QTimeEdit" name="alarm_time_edit"/></item>
+          <item row="1" column="0"><widget class="QLabel" name="alarm_memo_lbl"><property name="text"><string>메모:</string></property></widget></item>
+          <item row="1" column="1"><widget class="QLineEdit" name="alarm_memo_edit"/></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_medication">
+       <layout class="QVBoxLayout" name="med_layout">
+        <item><widget class="QLabel" name="med_title"><property name="text"><string>오늘의 복약 현황</string></property></widget></item>
+        <item><widget class="QCheckBox" name="med_morning_cb"><property name="text"><string>아침 (08:00) 처방약 및 영양제 복용 확인</string></property></widget></item>
+        <item><widget class="QCheckBox" name="med_lunch_cb"><property name="text"><string>점심 (13:00) 처방약 및 영양제 복용 확인</string></property></widget></item>
+        <item><widget class="QCheckBox" name="med_dinner_cb"><property name="text"><string>저녁 (19:00) 처방약 및 영양제 복용 확인</string></property></widget></item>
+        <item><widget class="QCheckBox" name="med_bed_cb"><property name="text"><string>취침 전 처방약 및 영양제 복용 확인</string></property></widget></item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_mail">
+       <layout class="QVBoxLayout" name="mail_layout">
+        <item><widget class="QLabel" name="mail_cam_lbl"><property name="text"><string>📷 카메라 화면 활성화 중...</string></property><property name="alignment"><set>Qt::AlignCenter</set></property></widget></item>
+        <item><widget class="QLabel" name="mail_ocr_lbl"><property name="text"><string>수취인 텍스트 스캔 중: [ 박ㅇㅇ 주임 ]</string></property><property name="alignment"><set>Qt::AlignCenter</set></property></widget></item>
+        <item><widget class="QPushButton" name="mail_start_btn"><property name="text"><string>스캔 완료 및 배달 시작</string></property></widget></item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_settings">
+       <layout class="QVBoxLayout" name="settings_layout">
+        <item><widget class="QLabel" name="settings_title"><property name="text"><string>설정</string></property></widget></item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_voice_test">
+       <layout class="QVBoxLayout" name="voice_test_layout">
+        <item><widget class="QLabel" name="voice_test_title"><property name="text"><string>🎤 음성 인식 테스트 창</string></property></widget></item>
+        <item><widget class="QTextEdit" name="voice_log_area"><property name="plainText"><string>시스템: 마이크 대기 중...</string></property></widget></item>
+        <item>
+         <layout class="QHBoxLayout" name="voice_btn_layout">
+          <item><widget class="QPushButton" name="voice_sim_btn"><property name="text"><string>음성 명령 시뮬레이션</string></property></widget></item>
+          <item><widget class="QPushButton" name="voice_clear_btn"><property name="text"><string>로그 지우기</string></property></widget></item>
+          <item><widget class="QPushButton" name="voice_tts_btn"><property name="text"><string>🔊 TTS 테스트</string></property></widget></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_weather_forecast">
+       <layout class="QVBoxLayout" name="weather_forecast_layout">
+        <item>
+         <layout class="QHBoxLayout" name="weather_header_layout">
+          <item><widget class="QLabel" name="weather_title"><property name="text"><string>📅 상세 날씨 및 3일 예보</string></property></widget></item>
+          <item><spacer name="weather_hdr_spacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+          <item><widget class="QPushButton" name="weather_close_btn"><property name="text"><string>닫기</string></property></widget></item>
+         </layout>
+        </item>
+        <item><widget class="QGroupBox" name="weather_hourly_group"><property name="title"><string>오늘 시간별 예보</string></property></widget></item>
+        <item><widget class="QGroupBox" name="weather_weekly_group"><property name="title"><string>3일 주간 예보</string></property></widget></item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="page_tts_test">
+       <layout class="QVBoxLayout" name="tts_test_layout">
+        <item><widget class="QLabel" name="tts_title"><property name="text"><string>🔊 TTS 테스트 창</string></property></widget></item>
+        <item><widget class="QTextEdit" name="tts_input_area"/></item>
+        <item>
+         <layout class="QHBoxLayout" name="tts_mode_layout">
+          <item><widget class="QLabel" name="tts_mode_lbl"><property name="text"><string>출력 대상</string></property></widget></item>
+          <item><widget class="QPushButton" name="tts_pc_btn"><property name="text"><string>💻 PC</string></property><property name="checkable"><bool>true</bool></property></widget></item>
+          <item><widget class="QPushButton" name="tts_robot_btn"><property name="text"><string>🤖 로봇</string></property><property name="checkable"><bool>true</bool></property></widget></item>
+         </layout>
+        </item>
+        <item><widget class="QTextEdit" name="tts_status_log"/></item>
+        <item>
+         <layout class="QHBoxLayout" name="tts_btn_layout">
+          <item><widget class="QPushButton" name="tts_speak_btn"><property name="text"><string>말하기</string></property></widget></item>
+          <item><widget class="QPushButton" name="tts_clear_btn"><property name="text"><string>입력/로그 지우기</string></property></widget></item>
+          <item><widget class="QPushButton" name="tts_back_btn"><property name="text"><string>◀ 음성 테스트로</string></property></widget></item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

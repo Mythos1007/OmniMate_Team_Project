@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <g id="zzz-effects">
+    <path d="M 400 80 L 440 80 L 400 120 L 440 120" fill="none" stroke="#4A90E2" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.8" />
+    <path d="M 445 40 L 475 40 L 445 70 L 475 70" fill="none" stroke="#4A90E2" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.6" />
+    <path d="M 370 50 L 390 50 L 370 70 L 390 70" fill="none" stroke="#4A90E2" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity="0.4" />
+  </g>
+
+  <g id="ears">
+    <rect x="36" y="206" width="40" height="100" rx="20" fill="#A3C9F0" />
+    <rect x="436" y="206" width="40" height="100" rx="20" fill="#A3C9F0" />
+  </g>
+
+  <g id="face-base">
+    <rect x="56" y="86" width="400" height="340" rx="140" ry="140" fill="#F4F9FF" stroke="#4A90E2" stroke-width="16" />
+    <rect x="76" y="106" width="360" height="300" rx="120" ry="120" fill="none" stroke="#FFFFFF" stroke-width="12" opacity="0.8" />
+  </g>
+
+  <g id="cheeks">
+    <ellipse cx="130" cy="280" rx="30" ry="15" fill="#FF8DA1" opacity="0.25" />
+    <ellipse cx="382" cy="280" rx="30" ry="15" fill="#FF8DA1" opacity="0.25" />
+  </g>
+
+  <g id="eyes-sleeping">
+    <path d="M 140 190 Q 172 215 204 190" fill="none" stroke="#2A3B4C" stroke-width="14" stroke-linecap="round" />
+    <path d="M 308 190 Q 340 215 372 190" fill="none" stroke="#2A3B4C" stroke-width="14" stroke-linecap="round" />
+  </g>
+
+  <g id="mouth">
+    <path d="M 236 310 C 236 310 256 302 276 310 C 276 310 256 335 236 310 Z" fill="#FF8DA1" stroke="#2A3B4C" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+</svg>

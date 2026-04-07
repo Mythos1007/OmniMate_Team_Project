@@ -1,0 +1,14 @@
+/**:
+  ros__parameters:
+    battery_percent: 87.5
+    location_name: home
+    robot_mode: idle
+    guide_forward_speed_mps: 0.12
+    guide_forward_duration_sec: 3.0
+    guide_motion_publish_period_sec: 0.1
+    output_type: twist
+    input_twist_topic: /assistant/cmd_vel
+    input_twist_stamped_topic: /assistant/cmd_vel_stamped
+    output_twist_topic: /cmd_vel
+    output_twist_stamped_topic: /cmd_vel_stamped
+    stamp_frame_id: base_link

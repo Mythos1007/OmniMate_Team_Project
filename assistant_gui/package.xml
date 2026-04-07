@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>assistant_gui</name>
+  <version>0.1.0</version>
+  <description>GUI package for the assistant robot.</description>
+  <maintainer email="todo@example.com">mythos</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>assistant_commands</exec_depend>
+  <exec_depend>assistant_brain</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

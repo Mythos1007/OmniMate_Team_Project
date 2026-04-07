@@ -1,0 +1,18 @@
+/**:
+  ros__parameters:
+    named_places.home.frame_id: map
+    named_places.home.x: 0.0
+    named_places.home.y: 0.0
+    named_places.home.yaw: 0.0
+    named_places.lab.frame_id: map
+    named_places.lab.x: 2.5
+    named_places.lab.y: 1.0
+    named_places.lab.yaw: 0.0
+    named_places.meeting_room.frame_id: map
+    named_places.meeting_room.x: 5.0
+    named_places.meeting_room.y: -1.0
+    named_places.meeting_room.yaw: 1.57
+    named_places.desk.frame_id: map
+    named_places.desk.x: 1.2
+    named_places.desk.y: 3.4
+    named_places.desk.yaw: 3.14
