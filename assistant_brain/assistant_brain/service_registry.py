@@ -5,12 +5,16 @@ from dataclasses import dataclass, field
 
 @dataclass(slots=True)
 class AlarmEntry:
+    """알람 저장 항목."""
+
     time: str
     label: str
 
 
 @dataclass(slots=True)
 class ScheduleEntry:
+    """일정 저장 항목."""
+
     title: str
     date: str
     time: str
@@ -18,12 +22,19 @@ class ScheduleEntry:
 
 @dataclass(slots=True)
 class DeliveryEntry:
+    """우편/물품 전달 요청 저장 항목."""
+
     item: str
     destination: str
 
 
 @dataclass(slots=True)
 class InMemoryServiceRegistry:
+    """브레인 핸들러들이 공유하는 인메모리 저장소.
+
+    실제 DB/외부 서비스 연동 전까지 상태를 메모리에 보관한다.
+    """
+
     weather_summary: str = '현재 날씨는 맑음, 23도입니다.'
     alarms: list[AlarmEntry] = field(default_factory=list)
     schedules: list[ScheduleEntry] = field(default_factory=list)

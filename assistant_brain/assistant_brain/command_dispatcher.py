@@ -7,6 +7,8 @@ from assistant_brain.service_registry import InMemoryServiceRegistry
 
 
 class CommandDispatcher:
+    """정규 명령을 도메인 핸들러로 분기하는 디스패처."""
+
     def __init__(self, registry: InMemoryServiceRegistry | None = None) -> None:
         self._registry = registry or InMemoryServiceRegistry()
         self._motion_handler = MotionHandler()
@@ -19,6 +21,7 @@ class CommandDispatcher:
         return self._registry
 
     def dispatch(self, command: CanonicalCommand) -> DispatchResult:
+        """명령 종류에 따라 적절한 핸들러를 선택해 실행한다."""
         if command.command in {
             'move_forward',
             'move_backward',
