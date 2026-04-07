@@ -17,7 +17,10 @@ class WeatherEngine(QObject, threading.Thread):
         configured = os.getenv("ASSISTANT_WEATHER_SECRETS_FILE", "").strip()
         if configured:
             return Path(configured).expanduser()
-        return Path.home() / ".config" / "assistant_gui" / "secrets.json"
+        shared_configured = os.getenv("ASSISTANT_SECRETS_FILE", "").strip()
+        if shared_configured:
+            return Path(shared_configured).expanduser()
+        return Path.home() / ".config" / "assistant" / "secrets.json"
 
     @classmethod
     def _load_api_key(cls) -> str:

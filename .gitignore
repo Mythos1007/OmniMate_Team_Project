@@ -18,6 +18,7 @@ log/
 
 # Local settings and secrets
 .env
+secrets.json
 *.secrets.json
 assistant_gui/assistant_gui/engines/weather_secrets.json
 assistant_audio/assistant_audio/tts_secrets.json

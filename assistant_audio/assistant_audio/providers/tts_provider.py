@@ -144,7 +144,10 @@ def _resolve_secrets_file_path() -> Path:
     configured = os.getenv('ASSISTANT_TTS_SECRETS_FILE', '').strip()
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / '.config' / 'assistant_audio' / 'tts_secrets.json'
+    shared_configured = os.getenv('ASSISTANT_SECRETS_FILE', '').strip()
+    if shared_configured:
+        return Path(shared_configured).expanduser()
+    return Path.home() / '.config' / 'assistant' / 'secrets.json'
 
 
 def _load_secrets_file() -> dict[str, str]:
