@@ -30,7 +30,7 @@ _WHY_NOT_RESPONSE = '현재 정지 상태거나 수행 중인 작업이 없어�
 
 
 class ChatResponder:
-    """chat intent 를 받아 응답 문자열을 반환한다."""
+    """chat intent 를 받아 응답 문자열을 반환 기능."""
 
     def respond(self, classification: IntentClassification) -> str:
         text = classification.slots.get('original_text', '')

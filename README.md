@@ -153,6 +153,33 @@ colcon build --base-paths src/assistant
 source install/setup.bash
 ```
 
+대표 실행 예시:
+
+```bash
+# GUI
+ros2 run assistant_gui assistant_gui_node
+
+# Brain
+ros2 run assistant_brain intent_router_node
+ros2 run assistant_brain dialog_manager_node
+
+# Audio
+ros2 run assistant_audio wake_word_node
+ros2 run assistant_audio stt_node
+ros2 run assistant_audio tts_node
+
+# Robot Orchestrator
+ros2 run assistant_robot omni_orchestrator_node
+```
+
+## 6-1) 런타임 환경변수(자주 쓰는 항목)
+
+- `ASSISTANT_SECRETS_FILE`: 공용 시크릿 파일 경로
+- `ASSISTANT_ENABLE_ROS_BRIDGE`: GUI에서 ROS 브리지 활성화 (`1/true`)
+- `ASSISTANT_FACE_VOICE_LOOP`: GUI 음성 루프 활성화 (`1/true`)
+- `ASSISTANT_VOICE_ONLY_FACE_MODE`: 음성 전용 얼굴 화면 고정 모드 (`1/true`)
+- `ASSISTANT_ROBOT_IP`: 원격 로봇 고정 peer IP (필요 시)
+
 ## 7) 문서/주석 정리 원칙
 
 - 공개 저장소 기준으로 민감정보(실키/토큰) 하드코딩 금지

@@ -7,7 +7,7 @@ from assistant_robot.models.mission_result import MissionEvent
 
 
 class StatusBriefExecution(BaseMissionExecution):
-    """기능: 이동 없이 현재 위치/상태를 짧게 음성 안내한다."""
+    """기능: 이동 없이 현재 위치/상태를 짧게 음성 안내 기능."""
 
     def step(self) -> MissionEvent:
         action = str(self.mission.payload.get("action", "")).strip()

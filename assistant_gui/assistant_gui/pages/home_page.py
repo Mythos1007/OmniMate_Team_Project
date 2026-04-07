@@ -49,6 +49,7 @@ class HomePage(QWidget):
         # 속도 추적용
         self._last_pose: tuple[float, float] | None = None
         self._last_pose_time: float = 0.0
+        self._last_pose_source: str = ""
         self._speed_samples: deque[float] = deque(maxlen=8)
         map_lay.addWidget(self.map_view, stretch=1)
         dest_lay = QHBoxLayout()
@@ -118,10 +119,14 @@ class HomePage(QWidget):
         self.st_eta.setProperty("class", "SubText")
         self.st_eta.setWordWrap(True)
         self.st_eta.setStyleSheet("color: #3B82F6; font-weight: bold;")
+        self.st_pose = QLabel("📍 지도 좌표 수신 대기 중")
+        self.st_pose.setProperty("class", "SubText")
+        self.st_pose.setWordWrap(True)
         status_lay.addWidget(st_title)
         status_lay.addWidget(self.st_main)
         status_lay.addWidget(self.st_sub)
         status_lay.addWidget(self.st_eta)
+        status_lay.addWidget(self.st_pose)
         right_layout.addWidget(status_frame)
 
         menu_frame = QFrame()
@@ -230,7 +235,7 @@ class HomePage(QWidget):
 
         return default_map, resolution, origin_x, origin_y, ref_w, ref_h
 
-    def update_robot_pose(self, x_m: float, y_m: float) -> None:
+    def update_robot_pose(self, x_m: float, y_m: float, source: str = "") -> None:
         now = time.monotonic()
         if self._last_pose is not None:
             dt = now - self._last_pose_time
@@ -241,7 +246,9 @@ class HomePage(QWidget):
                     self._speed_samples.append(speed)
         self._last_pose = (x_m, y_m)
         self._last_pose_time = now
+        self._last_pose_source = source
         self.map_view.set_robot_world_pose(x_m, y_m, is_default=False)
+        self._update_pose_tracking_status()
 
     def update_robot_pose_from_status(self, status: str) -> None:
         patterns = [
@@ -304,6 +311,25 @@ class HomePage(QWidget):
         self.air_face.setText(air_face_map.get(self.engine.air, "🙂"))
         self.air_txt.setText(f"미세먼지\n{self.engine.air}")
         self._update_eta()
+        self._update_pose_tracking_status()
+
+    def _update_pose_tracking_status(self) -> None:
+        if self._last_pose is None or self._last_pose_time <= 0.0:
+            self.st_pose.setText("📍 지도 좌표 수신 대기 중")
+            self.st_pose.setStyleSheet("color: #6B7280;")
+            return
+
+        age = time.monotonic() - self._last_pose_time
+        x_m, y_m = self._last_pose
+        source_suffix = f" · {self._last_pose_source}" if self._last_pose_source else ""
+
+        if age <= 3.0:
+            self.st_pose.setText(f"📍 실시간 좌표 수신 중{source_suffix} · x={x_m:.2f}, y={y_m:.2f}")
+            self.st_pose.setStyleSheet("color: #10B981; font-weight: bold;")
+            return
+
+        self.st_pose.setText(f"📍 최근 좌표 유지 중{source_suffix} · x={x_m:.2f}, y={y_m:.2f}")
+        self.st_pose.setStyleSheet("color: #F59E0B; font-weight: bold;")
 
     def _update_eta(self) -> None:
         path_len = self.map_view.get_path_length_m()

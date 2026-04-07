@@ -12,7 +12,7 @@ from rclpy.timer import Timer
 
 
 class TaskManagerNode(Node):
-    """현재 활성화된 로봇 작업을 추적하고 취소 요청을 처리한다."""
+    """현재 활성화된 로봇 작업을 추적하고 취소 요청을 처리 기능."""
 
     def __init__(self) -> None:
         super().__init__('task_manager_node')

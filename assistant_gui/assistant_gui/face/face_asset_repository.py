@@ -21,7 +21,7 @@ class AssetInfo:
 class FaceAssetRepository:
     """표정 자산 경로 조회 + 검증 메타데이터 제공."""
 
-    # TODO(asset): 신규 에셋 팩 표준 뷰박스(512)를 유지한다.
+    # TODO(asset): 신규 에셋 팩 표준 뷰박스(512)를 유지 기능.
     EXPECTED_VIEWBOX = "0 0 512 512"
 
     def __init__(self, root_dir: Path | None = None, *, expected_viewbox: str | None = None) -> None:

@@ -76,7 +76,7 @@ def build_mock_orchestrator(*, tts_profile: str = "default") -> tuple[OmniOrches
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     orchestrator, tts_provider = build_mock_orchestrator(tts_profile="demo")
-    # 기능 데모: 이동 명령과 non-move 날씨 명령을 순차 투입한다.
+    # 기능 데모: 이동 명령과 non-move 날씨 명령을 순차 투입 기능.
     orchestrator.ingest_voice_text("옴니야 회의실 A로 가줘")
     orchestrator.ingest_voice_text("옴니야 오늘 날씨 알려줘")
 

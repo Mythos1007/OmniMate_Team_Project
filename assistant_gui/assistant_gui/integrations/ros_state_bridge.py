@@ -45,7 +45,7 @@ class RosStateBridge(QObject):
         self._running = False
 
     def start(self) -> None:
-        """ROS2 스핀 스레드를 시작한다. ROS2가 없으면 아무것도 하지 않는다."""
+        """ROS2 스핀 스레드를 시작 기능. ROS2가 없으면 아무것도 하지 않는다."""
         if not _ROS_AVAILABLE:
             return
         if self._running:

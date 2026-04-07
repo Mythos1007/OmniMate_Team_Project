@@ -31,7 +31,7 @@ class FacePage(QWidget):
         self.face_label.setAlignment(Qt.AlignCenter)
         self.face_label.setMinimumSize(280, 280)
         self.face_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        # 라벨 위를 눌러도 부모 FacePage가 클릭 이벤트를 받도록 한다.
+        # 라벨 위를 눌러도 부모 FacePage가 클릭 이벤트를 받도록 기능.
         self.face_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.face_label)
         layout.addStretch(1)
@@ -40,7 +40,7 @@ class FacePage(QWidget):
         if autonomous:
             self.controller.start_timer(tick_interval_ms)
         else:
-            # 외부 루프를 쓰는 경우에도 첫 프레임은 즉시 갱신한다.
+            # 외부 루프를 쓰는 경우에도 첫 프레임은 즉시 갱신 기능.
             self.controller.tick()
 
     def _apply_scaled_pixmap(self) -> None:

@@ -13,7 +13,7 @@ from .face_state_manager import FaceStateManager
 
 
 class FaceController(QObject):
-    """ROS/GUI 이벤트를 얼굴 상태로 변환하고 렌더 결과를 배포한다."""
+    """ROS/GUI 이벤트를 얼굴 상태로 변환하고 렌더 결과를 배포 기능."""
 
     face_updated = Signal(object, object)  # (QPixmap, FaceRenderDebugInfo)
 
@@ -64,7 +64,7 @@ class FaceController(QObject):
         return self._timer is not None and self._timer.isActive()
 
     def start_timer(self, interval_ms: int = 100) -> None:
-        """공유 컨트롤러에서도 중복 타이머가 생기지 않도록 단일 타이머만 운용한다."""
+        """공유 컨트롤러에서도 중복 타이머가 생기지 않도록 단일 타이머만 운용 기능."""
         self._timer_interval_ms = max(16, int(interval_ms))
         if self._timer is None:
             self._timer = QTimer(self)
@@ -86,7 +86,7 @@ class FaceController(QObject):
             speaking_active=ctx.tts_active and ctx.speaking_enabled,
         )
         self._last_overlay = overlay
-        # 고해상도로 렌더링 후 뷰에서 화면 크기에 맞춰 스케일한다.
+        # 고해상도로 렌더링 후 뷰에서 화면 크기에 맞춰 스케일 기능.
         pixmap, debug = self.renderer.render(context=ctx, overlay=overlay, size=512)
         self._last_debug_info = debug
         self.face_updated.emit(pixmap, debug)
@@ -166,7 +166,7 @@ class FaceController(QObject):
 
     def on_charging_finished(self) -> None:
         self.state_manager.set_charging(False)
-        # 테스트/실운영 모두에서 즉시 상태 반영되도록 한 번 resolve를 유도한다.
+        # 테스트/실운영 모두에서 즉시 상태 반영되도록 한 번 resolve를 유도 기능.
         self.state_manager.resolve()
 
     def on_battery_low(self, percent: float) -> None:

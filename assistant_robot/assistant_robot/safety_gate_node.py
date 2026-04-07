@@ -10,7 +10,7 @@ from rclpy.node import Node
 
 
 class SafetyGateNode(Node):
-    """비상 정지 요청이 다른 모든 동작보다 우선되도록 보장한다."""
+    """비상 정지 요청이 다른 모든 동작보다 우선되도록 보장 기능."""
 
     def __init__(self) -> None:
         super().__init__('safety_gate_node')

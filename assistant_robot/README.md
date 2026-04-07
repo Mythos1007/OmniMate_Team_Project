@@ -1,7 +1,7 @@
 # assistant_robot
 
 ROS2 Jazzy 기반 비서/안내 로봇의 중앙 오케스트레이션 패키지입니다.
-핵심 목표는 "기능을 한 파일에 섞지 않고" 모듈/노드/어댑터로 분리해서, 나중에 조원 코드가 와도 adapter 교체만으로 바로 붙일 수 있게 만드는 것
+핵심 목표는 "기능을 한 파일에 섞지 않고" 모듈/노드/어댑터로 분리해, 추후 연동 시 adapter 교체만으로 확장 가능하게 유지하는 것입니다.
 
 ## 1. 아키텍처 한눈에 보기
 
@@ -84,6 +84,12 @@ ROS2 Jazzy 기반 비서/안내 로봇의 중앙 오케스트레이션 패키지
 - 테스트 실행
   - python3 -m pytest -v tests
 
+ROS2 노드 실행 예시:
+
+- ros2 run assistant_robot omni_orchestrator_node
+- ros2 run assistant_robot nav_bridge_node
+- ros2 run assistant_robot cmd_vel_adapter_node
+
 ## 6-1. 음성 명령 예시
 
 - 옴니야 회의실 A로 가줘
@@ -139,3 +145,14 @@ setup.py의 console_scripts에 아래가 등록되어 있습니다.
 - 현재 많은 adapter는 mock/placeholder 상태입니다.
 - TODO 주석 위치를 기준으로 실제 기능 모듈을 연결하세요.
 - state_machine의 status_message_for_gui를 GUI 기준 문체로 계속 다듬으면 운용성이 좋아집니다.
+
+## 11. 점검 체크리스트
+
+- 새 mission type 추가 시
+  - `models/mission.py` enum 반영
+  - `orchestrator/mission_dispatcher.py` executor 매핑 반영
+  - 필요 시 `services/tts_script_manager.py` 문구 key 추가
+- 배터리 정책 변경 시
+  - `orchestrator/battery_policy.py`와 테스트(`tests/test_battery_policy.py`)를 함께 수정
+- GUI 상태 텍스트 연동 변경 시
+  - `orchestrator/state_machine.py`의 `status_message_for_gui` 호환성 확인

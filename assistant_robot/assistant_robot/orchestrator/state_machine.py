@@ -9,7 +9,7 @@ from assistant_robot.orchestrator.battery_policy import BatteryPolicy
 
 
 class RobotStateMachine:
-    """기능: 로봇의 상위 상태를 단일 축으로 관리한다.
+    """기능: 로봇의 상위 상태를 단일 축으로 관리 기능.
 
     주의:
     - 상태(top_state)와 queue는 별개 개념이다.
@@ -29,7 +29,7 @@ class RobotStateMachine:
         self._refresh_status_message()
 
     def update_battery(self, *, battery_level: float, charging: bool, charging_eta_minutes: int | None = None) -> None:
-        # 기능: 배터리/충전 정보를 반영하고 LOW_BATTERY_RESTRICTED 진입 여부를 계산한다.
+        # 기능: 배터리/충전 정보를 반영하고 LOW_BATTERY_RESTRICTED 진입 여부를 계산 기능.
         self._state.battery_level = battery_level
         self._state.charging = charging
         self._state.charging_eta_minutes = charging_eta_minutes
@@ -88,7 +88,7 @@ class RobotStateMachine:
         self._refresh_status_message()
 
     def apply_event(self, mission: Mission, *, event_type: str, status: MissionStatus | None = None) -> None:
-        # 기능: executor 단계 이벤트를 top_state로 축약 반영한다.
+        # 기능: executor 단계 이벤트를 top_state로 축약 반영 기능.
         if event_type == "waiting_confirmation":
             self.set_waiting_confirmation(mission)
             return
@@ -102,7 +102,7 @@ class RobotStateMachine:
         return replace(self._state)
 
     def _refresh_status_message(self) -> None:
-        # 기능: GUI가 바로 쓸 수 있는 안내 문구를 중앙에서 생성한다.
+        # 기능: GUI가 바로 쓸 수 있는 안내 문구를 중앙에서 생성 기능.
         state = self._state
         if state.top_state == TopState.BOOTING:
             state.status_message_for_gui = "부팅 중입니다."

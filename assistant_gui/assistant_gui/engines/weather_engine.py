@@ -42,7 +42,7 @@ class WeatherEngine(QObject, threading.Thread):
     def __init__(self):
         QObject.__init__(self)
         threading.Thread.__init__(self, daemon=True)
-        # 보안상 API 키는 코드에 하드코딩하지 않고 외부 설정에서만 로드한다.
+        # 보안상 API 키는 코드에 하드코딩하지 않고 외부 설정에서만 로드 기능.
         self.api_key = self._load_api_key()
         self.nx, self.ny = "54", "124"  # 인천 고잔동 좌표
         self.lat, self.lon = 37.3886, 126.6424  # 인천 고잔동 위경도

@@ -41,7 +41,7 @@ class MockIntentParser(BaseIntentParser):
 
     def _extract_commands(self, text: str) -> list[CommandRequest]:
         commands: list[CommandRequest] = []
-        # 기능: 연결어(그리고, 쉼표) 기준으로 문장을 분리해 발화 순서를 최대한 보존한다.
+        # 기능: 연결어(그리고, 쉼표) 기준으로 문장을 분리해 발화 순서를 최대한 보존 기능.
         segments = [segment.strip() for segment in re.split(r"그리고|,", text) if segment.strip()]
         for segment in segments:
             schedule_match = re.search(r"(오늘\s*)?일정\s*(알려\s*줘|보여\s*줘|확인\s*해\s*줘)?", segment)
@@ -121,7 +121,7 @@ class MockIntentParser(BaseIntentParser):
                 )
                 continue
 
-            # STT 흔들림("날 씨")도 흡수하도록 공백 허용 패턴을 사용한다.
+            # STT 흔들림("날 씨")도 흡수하도록 공백 허용 패턴을 사용 기능.
             weather_match = re.search(r"날\s*씨", segment)
             if weather_match:
                 commands.append(

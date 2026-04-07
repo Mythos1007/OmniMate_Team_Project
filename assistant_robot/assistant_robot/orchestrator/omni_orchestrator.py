@@ -74,7 +74,7 @@ class OmniOrchestrator:
         self._sync_pending_count()
 
     def ingest_voice_text(self, raw_text: str) -> tuple[IntakeDecision, IntentParseResult]:
-        # 기능: 음성 문장을 정형 intent로 변환하고, 첫 번째 유효 명령만 접수한다.
+        # 기능: 음성 문장을 정형 intent로 변환하고, 첫 번째 유효 명령만 접수 기능.
         self._last_command_time = datetime.utcnow()
         parse_result = self._intent_parser.parse(raw_text)
         if parse_result.rejected_commands and parse_result.rejection_message_key:
@@ -115,7 +115,7 @@ class OmniOrchestrator:
             requires_confirmation=requires_confirmation,
         )
         if mission.mission_type == MissionType.STATUS_BRIEF and self._active_mission is not None:
-            # 기능: "어디가?" 질의는 현재 진행 중인 목적지를 우선 안내하도록 payload를 주입한다.
+            # 기능: "어디가?" 질의는 현재 진행 중인 목적지를 우선 안내하도록 payload를 주입 기능.
             destination = self._active_mission.target_location or self._active_mission.target_user
             if destination:
                 mission.payload["active_destination"] = destination
@@ -140,7 +140,7 @@ class OmniOrchestrator:
         return decision
 
     def dispatch_next(self) -> Mission | None:
-        # 기능: 현재 실행 중이 아니면 dispatch 가능한 다음 미션 하나를 선택한다.
+        # 기능: 현재 실행 중이 아니면 dispatch 가능한 다음 미션 하나를 선택 기능.
         if self._active_mission is not None:
             return self._active_mission
         mission = self._next_mission_resolver.pop_dispatchable(state=self._state_machine.state)
@@ -163,7 +163,7 @@ class OmniOrchestrator:
         event = self._active_execution.step()
         result = self._handle_event(event)
         if event.terminal:
-            # 정책: 저전력 제한 중 현재 미션이 끝나면 복귀 미션을 자동 삽입한다.
+            # 정책: 저전력 제한 중 현재 미션이 끝나면 복귀 미션을 자동 삽입 기능.
             finished_mission = self._active_mission
             self._active_execution = None
             self._active_mission = None
@@ -177,7 +177,7 @@ class OmniOrchestrator:
         return result
 
     def handle_face_recognized(self, user_name: str, *, now: datetime | None = None) -> bool:
-        # 기능: 인사 overlay 이벤트. 메인 상태/미션을 건드리지 않고 TTS만 출력한다.
+        # 기능: 인사 overlay 이벤트. 메인 상태/미션을 건드리지 않고 TTS만 출력 기능.
         current_time = now or datetime.utcnow()
         if not self._greeting_manager.should_greet(user_name, now=current_time):
             return False
@@ -185,7 +185,7 @@ class OmniOrchestrator:
         return True
 
     def check_idle_timeout(self, *, timeout_seconds: float = 30.0) -> bool:
-        """기능: 마지막 명령 이후 timeout_seconds 초 이상 입력이 없으면 복귀 미션을 삽입한다.
+        """기능: 마지막 명령 이후 timeout_seconds 초 이상 입력이 없으면 복귀 미션을 삽입 기능.
 
         - 이미 활성 미션이 있거나 아직 명령을 받은 적 없으면 아무것도 하지 않는다.
         - 복귀할 위치가 없는 경우 TTS로만 안내한다.
@@ -216,7 +216,7 @@ class OmniOrchestrator:
         return self._queue.list_pending()
 
     def _handle_event(self, event: MissionEvent) -> MissionResult:
-        # 기능: executor 이벤트를 상태머신/TTS로 반영해 최종 미션 결과로 변환한다.
+        # 기능: executor 이벤트를 상태머신/TTS로 반영해 최종 미션 결과로 변환 기능.
         status = MissionStatus(event.details.get("status", MissionStatus.RUNNING.value)) if event.details.get("status") else None
         if self._active_mission is not None:
             self._state_machine.apply_event(self._active_mission, event_type=event.event_type, status=status)

@@ -79,7 +79,7 @@ def extract_place_name(text: str) -> str | None:
 
 
 def _make(intent_name: str, confidence: float, slots: dict[str, str] | None = None) -> IntentClassification:
-    """intent_name 에서 카테고리를 자동 조회해 IntentClassification 을 생성한다."""
+    """intent_name 에서 카테고리를 자동 조회해 IntentClassification 을 생성 기능."""
     return IntentClassification(
         intent_name=intent_name,
         confidence=confidence,

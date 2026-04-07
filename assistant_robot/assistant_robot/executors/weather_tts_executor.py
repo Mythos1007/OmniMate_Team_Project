@@ -7,14 +7,14 @@ from assistant_robot.models.mission_result import MissionEvent
 
 
 class WeatherTTSExecution(BaseMissionExecution):
-    """기능: 이동 없이 날씨 정보를 조회하고 TTS 문구 key로 완료 이벤트를 반환한다."""
+    """기능: 이동 없이 날씨 정보를 조회하고 TTS 문구 key로 완료 이벤트를 반환 기능."""
 
     def __init__(self, mission: Mission, context: ExecutorContext) -> None:
         super().__init__(mission, context)
         self._done = False
 
     def step(self) -> MissionEvent:
-        # step 기반 실행기라서 한 번 완료 후 재호출되면 terminal completed를 유지한다.
+        # step 기반 실행기라서 한 번 완료 후 재호출되면 terminal completed를 유지 기능.
         if self._done:
             return MissionEvent(
                 mission_id=self.mission.mission_id,

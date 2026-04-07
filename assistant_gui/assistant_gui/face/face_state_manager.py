@@ -7,7 +7,7 @@ from .face_models import FaceBaseState, FaceContext, TempExpression
 
 
 class FaceStateManager:
-    """system/transient/temp를 분리해 최종 display 상태를 계산한다."""
+    """system/transient/temp를 분리해 최종 display 상태를 계산 기능."""
 
     LOW_BATTERY_ENTER_THRESHOLD = 15.0
     LOW_BATTERY_EXIT_THRESHOLD = 25.0
@@ -25,7 +25,7 @@ class FaceStateManager:
             self.context.fallback_base_state = state
 
         # TODO(ros): 충전 여부/배터리 잔량은 배터리 토픽 동기화가 가장 안전하다.
-        # state 기반 입력만 있어도 표정이 어긋나지 않게 전원 관련 래치를 함께 동기화한다.
+        # state 기반 입력만 있어도 표정이 어긋나지 않게 전원 관련 래치를 함께 동기화 기능.
         if state == FaceBaseState.CHARGING:
             self.context.is_charging = True
             self.context.low_battery_latched = False
@@ -33,7 +33,7 @@ class FaceStateManager:
             self.context.is_charging = False
             self.context.low_battery_latched = True
         elif state not in {FaceBaseState.ERROR, FaceBaseState.EMERGENCY_STOP}:
-            # 일반 상태로 복귀하면 power override를 해제한다.
+            # 일반 상태로 복귀하면 power override를 해제 기능.
             self.context.is_charging = False
             self.context.low_battery_latched = False
 
@@ -101,7 +101,7 @@ class FaceStateManager:
             self.context.system_base_state = FaceBaseState.CHARGING
             self.context.low_battery_latched = False
         else:
-            # 충전 해제 시에는 직전 정상 상태로 복귀한다.
+            # 충전 해제 시에는 직전 정상 상태로 복귀 기능.
             if self.context.system_base_state == FaceBaseState.CHARGING:
                 self.context.system_base_state = self.context.fallback_base_state
         self.context.last_update_time = now

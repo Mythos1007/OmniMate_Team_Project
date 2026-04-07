@@ -14,7 +14,7 @@ class FaceOverlayState:
 
 
 class FaceAnimationManager:
-    """blink / mouth overlay 프레임을 관리한다."""
+    """blink / mouth overlay 프레임을 관리 기능."""
 
     def __init__(self) -> None:
         self._overlay = FaceOverlayState()

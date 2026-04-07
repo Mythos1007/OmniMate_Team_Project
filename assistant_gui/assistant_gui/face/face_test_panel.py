@@ -56,7 +56,7 @@ class FaceTestPanel(QWidget):
         self.controller = controller or FaceController(self)
         self._use_shared_controller = use_shared_controller and controller is not None
 
-        # 설정 탭 테마(라이트/다크)를 그대로 따라가도록 패널 전용 스타일을 분리한다.
+        # 설정 탭 테마(라이트/다크)를 그대로 따라가도록 패널 전용 스타일을 분리 기능.
         self.setObjectName("face_test_panel")
         self.apply_theme_style("light")
 

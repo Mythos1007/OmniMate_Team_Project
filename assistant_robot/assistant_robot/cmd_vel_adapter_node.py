@@ -7,7 +7,7 @@ from rclpy.node import Node
 
 
 class CmdVelAdapterNode(Node):
-    """Twist와 TwistStamped 사이를 변환해 로봇 구동 토픽으로 전달한다."""
+    """Twist와 TwistStamped 사이를 변환해 로봇 구동 토픽으로 전달 기능."""
 
     def __init__(self) -> None:
         super().__init__('cmd_vel_adapter_node')

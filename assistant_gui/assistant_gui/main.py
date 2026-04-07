@@ -17,6 +17,14 @@ from pathlib import Path
 import threading
 import time
 from datetime import datetime
+
+CURRENT_DIR = Path(__file__).resolve().parent
+PACKAGE_PARENT = CURRENT_DIR.parent
+for candidate in (PACKAGE_PARENT, CURRENT_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
+
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QLabel, QPushButton, QStackedWidget,
                                QFrame)
@@ -27,6 +35,7 @@ try:
     from assistant_gui.engines.alarm_manager import AlarmManager
     from assistant_gui.engines.ocr_engine import OcrEngine
     from assistant_gui.engines.battery_engine import BatteryEngine
+    from assistant_gui.engines.pose_engine import PoseEngine
     from assistant_gui.integrations.ros_state_bridge import RosStateBridge
     from assistant_gui.face.face_controller import FaceController
     from assistant_gui.face.face_page import FacePage as UnifiedFacePage
@@ -51,6 +60,7 @@ except ModuleNotFoundError:
     from engines.alarm_manager import AlarmManager
     from engines.ocr_engine import OcrEngine
     from engines.battery_engine import BatteryEngine
+    from engines.pose_engine import PoseEngine
     from integrations.ros_state_bridge import RosStateBridge
     from face.face_controller import FaceController
     from face.face_page import FacePage as UnifiedFacePage
@@ -107,6 +117,10 @@ class OmniMateMain(QMainWindow):
         self.battery_engine.battery_changed.connect(self._on_battery_changed)
         self.battery_engine.start()
 
+        self.pose_engine = PoseEngine()
+        self.pose_engine.pose_changed.connect(self._on_pose_changed)
+        self.pose_engine.start()
+
         self.setWindowTitle("OmniMate - AI Robot Dashboard")
         self.resize(1600, 600)
 
@@ -143,7 +157,7 @@ class OmniMateMain(QMainWindow):
         self.hdr_network_lbl.setProperty("class", "SubText")
         self.hdr_mic_lbl = QLabel("🎙️ 확인 중...")
         self.hdr_mic_lbl.setProperty("class", "SubText")
-        self.hdr_battery_lbl = QLabel("🔋 82%")
+        self.hdr_battery_lbl = QLabel("🔋 --")
         self.hdr_battery_lbl.setProperty("class", "SubText")
         hdr_status_layout.addWidget(self.hdr_network_lbl)
         hdr_status_layout.addWidget(self.hdr_mic_lbl)
@@ -161,7 +175,7 @@ class OmniMateMain(QMainWindow):
         self.stacked_widget = QStackedWidget()
         self.main_layout.addWidget(self.stacked_widget)
 
-        # 얼굴 시스템은 단일 컨트롤러를 공유해 메인/설정 탭의 로직 일관성을 유지한다.
+        # 얼굴 시스템은 단일 컨트롤러를 공유해 메인/설정 탭의 로직 일관성을 유지 기능.
         # TODO(integration): 운영 중에는 설정 탭을 별도 테스트 컨트롤러로 분리할지 정책 확정.
         self.shared_face_controller = FaceController(self)
         self.shared_face_controller.start_timer(100)
@@ -200,7 +214,7 @@ class OmniMateMain(QMainWindow):
         # 처음 시작은 로봇 표정 화면으로
         self.switch_page(0)
 
-        # ROS 브리지는 필요할 때만 활성화한다. (기본: 비활성)
+        # ROS 브리지 선택적 활성화 기능. (기본: 비활성)
         # 네이티브 환경별 rclpy 종료 충돌을 피하기 위한 안전 모드.
         self._ros_bridge = None
         if os.getenv('ASSISTANT_ENABLE_ROS_BRIDGE', '0').strip() in {'1', 'true', 'TRUE'}:
@@ -273,6 +287,18 @@ class OmniMateMain(QMainWindow):
         """배터리 상태 변경 시 헤더 업데이트."""
         charging_icon = "⚡" if is_charging else "🔋"
         self.hdr_battery_lbl.setText(f"{charging_icon} {percent}%")
+        if hasattr(self, "shared_face_controller"):
+            try:
+                self.shared_face_controller.on_battery_changed(float(percent), charging=is_charging)
+            except Exception:
+                pass
+
+    def _on_pose_changed(self, x_m: float, y_m: float, source: str) -> None:
+        if hasattr(self, "home_page"):
+            try:
+                self.home_page.update_robot_pose(x_m, y_m, source)
+            except Exception:
+                pass
 
     def apply_window_size(self, width: int, height: int) -> None:
         width = max(800, min(3840, int(width)))
@@ -521,23 +547,23 @@ class OmniMateMain(QMainWindow):
     def switch_page(self, index, *, manual: bool = False):
         """페이지 전환 및 헤더 표시 여부 결정"""
         if manual:
-            # 사람이 직접 화면을 조작한 경우에만 표정 화면 고정을 해제한다.
+            # 사람이 직접 화면을 조작한 경우에만 표정 화면 고정을 해제 기능.
             self._manual_navigation_active = index != 0
             if self._manual_navigation_active:
                 self._manual_navigation_until = time.monotonic() + 20.0
             else:
                 self._manual_navigation_until = 0.0
 
-        # 수동 이동 직후에는 자동 이벤트가 즉시 표정 화면으로 덮어쓰지 않게 잠시 보호한다.
+        # 수동 이동 직후 자동 화면 덮어쓰기 방지 보호 기능.
         if (not manual and index == 0 and self._manual_navigation_active and
                 time.monotonic() < self._manual_navigation_until):
             return
 
-        # 음성 전용 모드에서는 수동 조작 전까지 표정 화면(0)만 유지한다.
+        # 음성 전용 모드에서는 수동 조작 전까지 표정 화면(0)만 유지 기능.
         if self._voice_only_face_mode and not manual and not self._manual_navigation_active and index != 0:
             index = 0
 
-        # 표정 화면으로 돌아오면 다시 음성 전용 고정 상태를 복구한다.
+        # 표정 화면으로 돌아오면 다시 음성 전용 고정 상태를 복구 기능.
         if index == 0:
             self._manual_navigation_active = False
             self._manual_navigation_until = 0.0
@@ -557,7 +583,7 @@ class OmniMateMain(QMainWindow):
         self._sync_face_voice_loop()
 
     def _sync_face_voice_loop(self) -> None:
-        # 음성 인식은 페이지와 무관하게 항상 유지한다.
+        # 음성 인식은 페이지와 무관하게 항상 유지 기능.
         should_run = self._face_voice_loop_enabled
         if should_run and not self._face_voice_loop_active:
             self._face_voice_loop_active = True
@@ -750,10 +776,10 @@ class OmniMateMain(QMainWindow):
         backend = self._resolve_quick_tts_backend()
         fallback_order = ["edge_tts", "speech_dispatcher", "espeak_ng"]
         if selected in {"edge_tts", "speech_dispatcher", "espeak_ng"}:
-            # 사용자가 특정 엔진을 명시한 경우에는 해당 엔진만 사용한다.
+            # 사용자 지정 엔진 단독 사용 기능.
             candidates = [selected]
         else:
-            # auto 모드에서만 다른 엔진으로 순차 폴백한다.
+            # auto 모드 한정 순차 폴백 기능.
             candidates: list[str] = []
             if backend in fallback_order:
                 candidates.append(backend)
@@ -778,7 +804,7 @@ class OmniMateMain(QMainWindow):
                     pass
             return False
 
-        # 실제 재생 완료 콜백이 없어 텍스트 길이 기반으로 speaking 상태를 자동 해제한다.
+        # 실제 재생 완료 콜백이 없어 텍스트 길이 기반으로 speaking 상태를 자동 해제 기능.
         est_ms = max(1200, min(5500, 650 + (len(text) * 85)))
         self._face_voice_pause_until = time.monotonic() + (est_ms / 1000.0) + 0.4
         QTimer.singleShot(est_ms, self._finish_quick_tts)
@@ -842,7 +868,7 @@ class OmniMateMain(QMainWindow):
         if not shutil.which("spd-say"):
             return False
         try:
-            # spd-say가 무음으로 끝나는 환경을 줄이기 위해 dispatcher 데몬을 보장한다.
+            # spd-say가 무음으로 끝나는 환경을 줄이기 위해 dispatcher 데몬을 보장 기능.
             if shutil.which("speech-dispatcher"):
                 probe = subprocess.run(["pgrep", "-f", "speech-dispatcher"], capture_output=True, text=True, timeout=1)
                 if probe.returncode != 0:
@@ -922,7 +948,7 @@ class OmniMateMain(QMainWindow):
     # ─── ROS2 상태 수신 ─────────────────────────────────────────────────────
 
     def _start_ros_bridge(self) -> None:
-        """ROS2 상태 브리지를 시작하고 Qt 시그널에 연결한다."""
+        """ROS2 상태 브리지 시작 및 Qt 시그널 연결 기능."""
         self._ros_bridge = RosStateBridge(parent=self)
         self._ros_bridge.state_changed.connect(self._on_ros_state_changed)
         self._ros_bridge.status_changed.connect(self._on_ros_status_changed)
@@ -931,7 +957,7 @@ class OmniMateMain(QMainWindow):
     def _on_ros_state_changed(self, state: str) -> None:
         """ROS2 AssistantState 변경 수신 시 GUI 업데이트."""
         # TODO(ros): state 토픽에 listening 시작/종료 구간 정보가 분리되면
-        # on_listening_started/on_listening_finished 이벤트로 연결한다.
+        # on_listening_started/on_listening_finished 이벤트 연결 기능.
         _state_labels = {
             'SLEEPING':       ('💤 절전 모드', '#9CA3AF'),
             'IDLE':           ('🎤️ 호출어 대기 중...', '#10B981'),
@@ -948,17 +974,17 @@ class OmniMateMain(QMainWindow):
             f'font-size: 16px; font-weight: bold; color: {color};'
         )
 
-        # 메인 얼굴/설정 탭은 동일한 FaceController 상태머신을 공유한다.
+        # 메인 얼굴/설정 탭 동일 FaceController 상태머신 공유 기능.
         self.shared_face_controller.on_robot_state_changed(state)
 
-        # SLEEPING 상태면 FacePage로 자동 전환한다.
+        # SLEEPING 상태 기반 FacePage 자동 전환 기능.
         if state == 'SLEEPING':
             self.switch_page(0)
 
     def _on_ros_status_changed(self, status: str) -> None:
         """status_text 로그 수신 (필요 시 팁소 또는 상태 표시에 사용할 수 있다)."""
         # TODO(integration): 상태 텍스트에서 TTS 시작/종료, wakeword, error 이벤트를 파싱해
-        # shared_face_controller.on_tts_started/on_tts_finished/on_wakeword_detected로 연결한다.
+        # shared_face_controller.on_tts_started/on_tts_finished/on_wakeword_detected 연결 기능.
         if hasattr(self, 'home_page'):
             self.home_page.update_robot_pose_from_status(status)
 
@@ -987,7 +1013,17 @@ class OmniMateMain(QMainWindow):
             output = (result.stdout + result.stderr).lower()
             if "no soundcards found" in output:
                 return False
-            return result.returncode == 0
+            if result.returncode != 0:
+                return False
+
+            # Require at least one real capture device line.
+            # Ignore virtual-only endpoints that often appear when no physical mic is connected.
+            capture_lines = [line.strip().lower() for line in result.stdout.splitlines() if "card " in line and "device " in line]
+            if not capture_lines:
+                return False
+
+            real_lines = [line for line in capture_lines if "loopback" not in line and "dummy" not in line]
+            return len(real_lines) > 0
         except Exception:
             return False
 
@@ -1018,6 +1054,11 @@ class OmniMateMain(QMainWindow):
         if hasattr(self, 'battery_engine'):
             try:
                 self.battery_engine.stop()
+            except Exception:
+                pass
+        if hasattr(self, 'pose_engine'):
+            try:
+                self.pose_engine.stop()
             except Exception:
                 pass
         if self._ros_bridge is not None:

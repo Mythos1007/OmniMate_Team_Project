@@ -25,6 +25,16 @@
 - assistant_audio/tts_node.py
   - `/assistant/speak`를 구독해 TTS 백엔드로 출력
 
+## 시크릿/환경변수
+
+- 공용 시크릿 파일 우선순위
+  - `ASSISTANT_TTS_SECRETS_FILE`
+  - `ASSISTANT_SECRETS_FILE`
+  - 기본값: `~/.config/assistant/secrets.json`
+- 주요 키
+  - `elevenlabs_api_key`, `elevenlabs_voice_id`
+  - `cartesia_api_key`, `cartesia_voice_id`
+
 ## 실행 엔트리포인트
 
 - wake_word_node

@@ -8,7 +8,7 @@ import yaml
 
 
 class TTSScriptManager:
-    """기능: 상황별 TTS 문구를 key 기반으로 중앙 조회/포맷한다."""
+    """기능: 상황별 TTS 문구를 key 기반으로 중앙 조회/포맷 기능."""
 
     def __init__(self, *, profile: str = "default", resource_file: str | None = None) -> None:
         self.profile = profile
@@ -16,7 +16,7 @@ class TTSScriptManager:
         self._round_robin_index: dict[str, int] = defaultdict(int)
 
     def _load_messages(self, resource_file: str | None) -> dict[str, Any]:
-        # 기능: profile(dev/demo/default)에 맞는 YAML 세트를 로딩한다.
+        # 기능: profile(dev/demo/default)에 맞는 YAML 세트를 로딩 기능.
         file_name = resource_file or {
             "default": "tts_messages.yaml",
             "dev": "tts_messages_dev.yaml",
@@ -28,7 +28,7 @@ class TTSScriptManager:
         return loaded.get("messages", loaded)
 
     def get_message(self, key: str, **kwargs: Any) -> str:
-        # 기능: 기본 문구 조회. 리스트면 첫 번째 후보를 사용한다.
+        # 기능: 기본 문구 조회. 리스트면 첫 번째 후보를 사용 기능.
         value = self._messages.get(key)
         if value is None:
             fallback = self._messages.get("error.general", key)
@@ -38,7 +38,7 @@ class TTSScriptManager:
         return str(value).format(**kwargs)
 
     def get_random_message(self, key: str, **kwargs: Any) -> str:
-        # 기능: 후보가 여러 개면 round-robin으로 문구를 번갈아 선택한다.
+        # 기능: 후보가 여러 개면 round-robin으로 문구를 번갈아 선택 기능.
         value = self._messages.get(key)
         if value is None:
             return self.get_message("error.general", **kwargs)

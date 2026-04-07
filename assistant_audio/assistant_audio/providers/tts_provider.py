@@ -24,7 +24,7 @@ class TTSProvider(ABC):
 
     @abstractmethod
     def speak(self, text: str) -> None:
-        """구현체 백엔드를 사용해 전달된 텍스트를 발화한다."""
+        """구현체 백엔드를 사용해 전달된 텍스트를 발화 기능."""
 
 
 @dataclass(frozen=True)
@@ -88,11 +88,11 @@ class GeneratedAudioTTSProvider(TTSProvider, ABC):
 
     @abstractmethod
     def _audio_suffix(self) -> str:
-        """생성할 오디오 파일 확장자를 반환한다."""
+        """생성할 오디오 파일 확장자를 반환 기능."""
 
     @abstractmethod
     def _generate_audio_file(self, text: str, audio_path: Path) -> None:
-        """text를 audio_path 파일로 생성한다."""
+        """text를 audio_path 파일로 생성 기능."""
 
     def _play_audio_file(self, playback_command: str, audio_path: Path) -> None:
         subprocess.run(self._build_playback_command(playback_command, audio_path), check=True)
@@ -191,7 +191,7 @@ def _raise_http_error(backend_name: str, response: requests.Response) -> None:
 
 
 class SpeechDispatcherTTSProvider(TTSProvider):
-    """spd-say를 사용해 로컬 스피커로 텍스트를 발화한다."""
+    """spd-say를 사용해 로컬 스피커로 텍스트를 발화 기능."""
 
     def __init__(self, voice_name: str = 'default', language: str = 'ko') -> None:
         self._voice_name = voice_name
@@ -245,7 +245,7 @@ class SpeechDispatcherTTSProvider(TTSProvider):
 
 
 class EdgeTTSProvider(GeneratedAudioTTSProvider):
-    """edge-tts를 사용해 네트워크 기반 고품질 음성으로 발화한다."""
+    """edge-tts를 사용해 네트워크 기반 고품질 음성으로 발화 기능."""
 
     backend_display_name = 'edge_tts'
 
@@ -293,7 +293,7 @@ class EdgeTTSProvider(GeneratedAudioTTSProvider):
 
 
 class ElevenLabsTTSProvider(GeneratedAudioTTSProvider):
-    """ElevenLabs REST/SDK를 이용해 고품질 음성을 생성한다."""
+    """ElevenLabs REST/SDK를 이용해 고품질 음성을 생성 기능."""
 
     backend_display_name = 'elevenlabs'
 
@@ -333,7 +333,7 @@ class ElevenLabsTTSProvider(GeneratedAudioTTSProvider):
             if self._generate_with_sdk(text, audio_path):
                 return
         except RuntimeError:
-            # SDK 버전 차이 또는 런타임 이슈가 있으면 REST fallback으로 한 번 더 시도한다.
+            # SDK 버전 차이 또는 런타임 이슈가 있으면 REST fallback으로 한 번 더 시도 기능.
             pass
         self._generate_with_rest(text, audio_path)
 
@@ -390,7 +390,7 @@ class ElevenLabsTTSProvider(GeneratedAudioTTSProvider):
 
 
 class CartesiaTTSProvider(GeneratedAudioTTSProvider):
-    """Cartesia REST API를 이용해 배치형 음성을 생성한다."""
+    """Cartesia REST API를 이용해 배치형 음성을 생성 기능."""
 
     backend_display_name = 'cartesia'
 

@@ -7,7 +7,7 @@ from rclpy.node import Node
 
 
 class StatusProviderNode(Node):
-    """로봇 상태 조회를 위한 간단한 서비스 엔드포인트를 제공한다."""
+    """로봇 상태 조회를 위한 간단한 서비스 엔드포인트를 제공 기능."""
 
     def __init__(self) -> None:
         super().__init__('status_provider_node')

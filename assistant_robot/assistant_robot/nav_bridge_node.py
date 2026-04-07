@@ -14,7 +14,7 @@ from rclpy.node import Node
 
 
 class NavBridgeNode(Node):
-    """이름 기반 목적지를 로컬 액션 서버를 통해 Nav2 목표로 변환한다."""
+    """이름 기반 목적지를 로컬 액션 서버를 통해 Nav2 목표로 변환 기능."""
 
     def __init__(self) -> None:
         super().__init__('nav_bridge_node')
@@ -57,7 +57,7 @@ class NavBridgeNode(Node):
 
     def _on_cancel_request(self, goal_handle: ServerGoalHandle) -> CancelResponse:
         self.get_logger().warn(f'Cancel requested for named-place goal: {goal_handle.request.place_name}')
-        # TODO: 전체 연동이 완료되면 취소 요청을 Nav2 goal handle까지 전달한다.
+        # TODO: 전체 연동이 완료되면 취소 요청을 Nav2 goal handle까지 전달 기능.
         return CancelResponse.ACCEPT
 
     async def _execute_goal(self, goal_handle: ServerGoalHandle) -> GuideToNamedPlace.Result:
@@ -83,7 +83,7 @@ class NavBridgeNode(Node):
         feedback.progress = 0.4
         goal_handle.publish_feedback(feedback)
 
-        # TODO: Nav2의 피드백을 받아 GuideToNamedPlace 피드백으로 중계한다.
+        # TODO: Nav2의 피드백을 받아 GuideToNamedPlace 피드백으로 중계 기능.
         nav_goal_handle_future = self._nav_client.send_goal_async(nav_goal)
         nav_goal_handle = await nav_goal_handle_future
         if not nav_goal_handle.accepted:

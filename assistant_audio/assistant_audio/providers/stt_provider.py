@@ -14,7 +14,7 @@ class STTProvider(ABC):
 
     @abstractmethod
     def transcribe(self) -> tuple[str, float]:
-        """인식된 텍스트와 신뢰도를 반환한다."""
+        """인식된 텍스트와 신뢰도를 반환 기능."""
 
 
 class MockSTTProvider(STTProvider):
@@ -55,7 +55,7 @@ def _record_audio(
 
 
 class PocketsphinxSTTProvider(STTProvider):
-    """arecord와 pocketsphinx_continuous를 사용해 로컬에서 음성을 텍스트로 변환한다."""
+    """arecord와 pocketsphinx_continuous를 사용해 로컬에서 음성을 텍스트로 변환 기능."""
 
     def __init__(
         self,
@@ -121,7 +121,7 @@ class PocketsphinxSTTProvider(STTProvider):
 
 
 class FasterWhisperSTTProvider(STTProvider):
-    """faster-whisper를 사용해 한국어 음성을 텍스트로 변환한다."""
+    """faster-whisper를 사용해 한국어 음성을 텍스트로 변환 기능."""
 
     def __init__(
         self,

@@ -11,7 +11,7 @@ from assistant_robot.models.robot_state import RobotState
 
 @dataclass(slots=True)
 class BatteryPolicy:
-    """기능: 배터리 관련 intake/dispatch 정책을 단일 클래스로 관리한다."""
+    """기능: 배터리 관련 intake/dispatch 정책을 단일 클래스로 관리 기능."""
 
     low_battery_threshold: float = 20.0
     allow_queue_registration_while_charging: bool = True
@@ -21,7 +21,7 @@ class BatteryPolicy:
         return battery_level <= self.low_battery_threshold and not charging
 
     def can_accept_command(self, command: CommandRequest, state: RobotState) -> tuple[bool, str]:
-        # 정책: 저전력 제한에서는 이동 필요 명령만 거절하고, non-move 요청은 허용한다.
+        # 정책: 저전력 제한에서는 이동 필요 명령만 거절하고, non-move 요청은 허용 기능.
         if state.charging and not self.allow_queue_registration_while_charging and command.requires_movement:
             return False, "charging_reject_move"
         if state.low_battery_restricted and command.requires_movement:

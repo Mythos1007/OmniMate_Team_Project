@@ -4,7 +4,7 @@ from assistant_robot.interfaces.weather_provider import WeatherData
 
 
 class WeatherFormatter:
-    """기능: 같은 날씨 데이터를 GUI용/TTS용 표현으로 분리 변환한다."""
+    """기능: 같은 날씨 데이터를 GUI용/TTS용 표현으로 분리 변환 기능."""
 
     def format_for_gui(self, weather: WeatherData) -> str:
         humidity = f"습도 {weather.humidity_percent}%" if weather.humidity_percent is not None else "습도 정보 없음"

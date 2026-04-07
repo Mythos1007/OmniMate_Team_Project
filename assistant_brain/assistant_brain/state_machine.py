@@ -43,7 +43,7 @@ class AssistantSnapshot:
 
 
 class AssistantStateMachine:
-    """상위 수준의 어시스턴트 상태를 추적하고 전이 가능 여부를 검사한다."""
+    """상위 수준의 어시스턴트 상태를 추적하고 전이 가능 여부를 검사 기능."""
 
     def __init__(self) -> None:
         self._snapshot = AssistantSnapshot()
