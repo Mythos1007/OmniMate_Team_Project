@@ -451,7 +451,7 @@ class OmniMateMain(QMainWindow):
         )
 
     def send_nav_to_coordinate(self, x_m: float, y_m: float) -> tuple[bool, str]:
-        """지도 클릭으로 선택한 좌표로 로봇을 이동시키는 명령을 발행한다."""
+        """지도 클릭 좌표 기반 로봇 이동 명령 발행 기능."""
         if not shutil.which("ros2"):
             return False, "ros2 CLI를 찾을 수 없습니다."
 

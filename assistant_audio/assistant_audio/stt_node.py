@@ -18,10 +18,10 @@ from rclpy.node import Node
 
 
 class STTNode(Node):
-    """웨이크 이벤트를 받아 음성 인식 결과 메시지로 변환한다.
+    """웨이크 이벤트 수신 후 음성 인식 결과 메시지 발행 기능.
 
-    1단계에서는 모의 프로바이더와 지연된 가짜 전사 발행을 사용한다.
-    TODO: 마이크 스트리밍, VAD, Whisper/Vosk 같은 교체 가능한 프로바이더를 추가한다.
+    1단계: 모의 프로바이더 + 지연된 가짜 전사 발행.
+    TODO: 마이크 스트리밍, VAD, Whisper/Vosk 교체형 프로바이더 연동.
     """
 
     def __init__(self) -> None:

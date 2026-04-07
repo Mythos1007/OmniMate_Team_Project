@@ -24,7 +24,7 @@ from rclpy.timer import Timer
 
 
 class DialogManagerNode(Node):
-    """어시스턴트의 대화 및 작업 상태 머신을 관리한다.
+    """어시스턴트 대화/작업 상태 머신 관리 기능.
 
     상태 흐름:
         SLEEPING ─(wake word)→ LISTENING ─(transcript)→ PROCESSING

@@ -21,7 +21,7 @@ class CommandDispatcher:
         return self._registry
 
     def dispatch(self, command: CanonicalCommand) -> DispatchResult:
-        """명령 종류에 따라 적절한 핸들러를 선택해 실행한다."""
+        """명령 종류 기반 핸들러 선택/실행 기능."""
         if command.command in {
             'move_forward',
             'move_backward',

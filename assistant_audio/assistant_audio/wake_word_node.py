@@ -11,10 +11,10 @@ _DEFAULT_WAKE_WORDS = ('omni', '옴니', '옴니야')
 
 
 class WakeWordNode(Node):
-    """웨이크 워드 이벤트를 발행한다.
+    """웨이크 워드 감지 이벤트 발행 기능.
 
-    real 모드에서는 마이크 + VAD + 키워드 감지 엔진(pvporcupine 등)으로 교체한다.
-    현재는 타이머 기반 mock 또는 /assistant/manual_wake 토픽으로 수동 트리거 가능.
+    real 모드: 마이크 + VAD + 키워드 감지 엔진(pvporcupine 등) 연동 지점.
+    현재 모드: 타이머 기반 mock 또는 /assistant/manual_wake 수동 트리거.
 
     지원 파라미터:
         wake_word_enabled   (bool)  : false 면 감지 비활성화
@@ -70,7 +70,7 @@ class WakeWordNode(Node):
             )
 
     def trigger_wake(self, matched_word: str = 'omni') -> None:
-        """외부(real STT/VAD 백엔드)에서 wake word 매칭 시 호출하는 공개 메서드."""
+        """외부 STT/VAD 백엔드 연동용 웨이크 이벤트 트리거 메서드."""
         if not self._wake_word_enabled:
             return
         self._wake_publisher.publish(Bool(data=True))

@@ -123,7 +123,7 @@ class RotatedMapView(QWidget):
         self.update()
 
     def get_path_length_m(self) -> float | None:
-        """현재 경로의 남은 거리를 미터로 반환한다. 경로가 없으면 None."""
+        """현재 경로의 남은 거리 미터값 반환 기능. 경로 부재 시 None 반환."""
         if len(self._path_points) < 2 or self._base_map is None:
             return None
         display_w = float(self._base_map.width())
@@ -137,7 +137,7 @@ class RotatedMapView(QWidget):
         return total * px_to_ref * self._resolution
 
     def set_nav_target_preview(self, target_world_x: float, target_world_y: float) -> None:
-        """클릭 위치만 미리 표시한다. 경로는 계획하지 않는다."""
+        """클릭 위치 미리보기 점 표시 기능. 경로 계획은 제외."""
         if self._base_map is None or self._coord_rot_tf is None:
             return
         ref_size = self._reference_size_px or (self._base_map.width(), self._base_map.height())
@@ -154,7 +154,7 @@ class RotatedMapView(QWidget):
         self.update()
 
     def clear_nav_target_preview(self) -> None:
-        """미리보기 점과 경로를 지운다. nav_target_world는 유지한다."""
+        """미리보기 점/경로 초기화 기능. nav_target_world 값은 유지."""
         self._target_rot_pt = None
         self._path_points = []
         self.update()
