@@ -30,7 +30,7 @@ class RotatedMapView(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(260)
+        self.setMinimumHeight(170)
         self._map_path = map_path
         self._coord_rotation_deg = coord_rotation_deg
         self._resolution = resolution_m_per_px

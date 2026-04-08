@@ -7,6 +7,7 @@ ROS2 환경이 없어도 GUI 단독 실행이 가능하도록 import 실패를 �
 """
 from __future__ import annotations
 
+import json
 import threading
 from typing import Callable
 
@@ -110,6 +111,25 @@ if _ROS_AVAILABLE:
                 lambda msg: self._on_status(msg.data),
                 10,
             )
+            self.create_subscription(
+                String,
+                '/assistant/orchestrator/status',
+                self._on_orchestrator_status,
+                10,
+            )
 
         def _on_state_msg(self, msg: object) -> None:
             self._on_state(str(msg.state))  # type: ignore[union-attr]
+
+        def _on_orchestrator_status(self, msg: String) -> None:
+            try:
+                payload = json.loads(msg.data)
+            except Exception:
+                self._on_status(msg.data)
+                return
+            top_state = str(payload.get('top_state', '')).strip()
+            status_message = str(payload.get('status_message_for_gui', '')).strip()
+            if top_state:
+                self._on_state(top_state)
+            if status_message:
+                self._on_status(status_message)

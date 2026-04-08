@@ -51,7 +51,8 @@ class BatteryEngine(QObject, threading.Thread):
         self._running = True
         self.last_percent = -1
         self.last_charging = False
-        self._percent_window: collections.deque[int] = collections.deque(maxlen=30)
+        window_size = max(1, int(os.getenv("ASSISTANT_BATTERY_AVERAGE_WINDOW", "50")))
+        self._percent_window: collections.deque[int] = collections.deque(maxlen=window_size)
 
     def _emit_if_changed(self, percent: int, is_charging: bool) -> None:
         safe_percent = max(0, min(100, int(percent)))

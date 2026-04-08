@@ -53,12 +53,37 @@ sudo apt install -y \
 
 - 공용 시크릿 파일 경로: `~/.config/assistant/secrets.json`
 - 예시 파일: `secrets.example.json`
+- 이 파일은 프로젝트 폴더 안이 아니라 각자 PC의 홈 디렉터리 아래에 만들어야 합니다.
 
 설정 방법:
 
 ```bash
 mkdir -p ~/.config/assistant
 cp secrets.example.json ~/.config/assistant/secrets.json
+```
+
+로컬에서 바로 생성하고 편집까지 여는 명령:
+
+```bash
+mkdir -p ~/.config/assistant \
+  && cp /home/mythos/assistant_ws/src/assistant/secrets.example.json ~/.config/assistant/secrets.json \
+  && ${EDITOR:-nano} ~/.config/assistant/secrets.json
+```
+
+예시 내용을 한 번에 생성하려면:
+
+```bash
+mkdir -p ~/.config/assistant
+cat > ~/.config/assistant/secrets.json <<'EOF'
+{
+  "weather_api_key": "",
+  "elevenlabs_api_key": "",
+  "elevenlabs_voice_id": "",
+  "cartesia_api_key": "",
+  "cartesia_voice_id": ""
+}
+EOF
+${EDITOR:-nano} ~/.config/assistant/secrets.json
 ```
 
 필수 키 항목:
@@ -178,7 +203,8 @@ ros2 run assistant_robot omni_orchestrator_node
 - `ASSISTANT_ENABLE_ROS_BRIDGE`: GUI에서 ROS 브리지 활성화 (`1/true`)
 - `ASSISTANT_FACE_VOICE_LOOP`: GUI 음성 루프 활성화 (`1/true`)
 - `ASSISTANT_VOICE_ONLY_FACE_MODE`: 음성 전용 얼굴 화면 고정 모드 (`1/true`)
-- `ASSISTANT_ROBOT_IP`: 원격 로봇 고정 peer IP (필요 시)
+- `ASSISTANT_ROBOT_IP`: GUI/PC가 붙을 원격 로봇 IP. 미지정 시 현재 기본값은 `192.168.96.23`
+- `ASSISTANT_TURTLEBOT_IP`: 기존 호환용 로봇 IP 이름. 없으면 `ASSISTANT_ROBOT_IP`를 우선 사용
 
 ## 7) 문서/주석 정리 원칙
 

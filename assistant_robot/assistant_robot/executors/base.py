@@ -10,6 +10,10 @@ from assistant_robot.interfaces.weather_provider import BaseWeatherProvider
 from assistant_robot.models.mission import Mission
 from assistant_robot.models.mission_result import MissionEvent
 from assistant_robot.services.weather_formatter import WeatherFormatter
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from assistant_robot.services.runtime_data_service import RuntimeDataService
 
 
 @dataclass(slots=True)
@@ -19,6 +23,7 @@ class ExecutorContext:
     weather_provider: BaseWeatherProvider
     weather_formatter: WeatherFormatter
     logger: logging.Logger
+    runtime_data_service: RuntimeDataService | None = None
 
 
 class BaseMissionExecution(ABC):
@@ -29,6 +34,15 @@ class BaseMissionExecution(ABC):
     @abstractmethod
     def step(self) -> MissionEvent:
         raise NotImplementedError
+
+    def cancel(self) -> None:
+        return None
+
+    def pause_navigation(self) -> bool:
+        return False
+
+    def resume_navigation(self) -> bool:
+        return False
 
 
 class BaseMissionExecutor(ABC):

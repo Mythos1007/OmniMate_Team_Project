@@ -12,6 +12,7 @@ class ReturnToBaseExecution(BaseMissionExecution):
         super().__init__(mission, context)
         self._navigation: NavigationHandle | None = None
         self._started = False
+        self._paused_target_location: str | None = None
 
     def step(self) -> MissionEvent:
         target_location = self.mission.target_location or "충전소"
@@ -42,6 +43,25 @@ class ReturnToBaseExecution(BaseMissionExecution):
                 details={"status": MissionStatus.COMPLETED.value},
             )
         return MissionEvent(mission_id=self.mission.mission_id, event_type="navigating")
+
+    def cancel(self) -> None:
+        if self._navigation is not None:
+            self.context.navigation_controller.cancel_navigation(self._navigation)
+
+    def pause_navigation(self) -> bool:
+        if not self._started or self._navigation is None:
+            return False
+        self._paused_target_location = self._navigation.target_location
+        self.context.navigation_controller.cancel_navigation(self._navigation)
+        self._navigation = None
+        return True
+
+    def resume_navigation(self) -> bool:
+        if not self._started or not self._paused_target_location:
+            return False
+        self._navigation = self.context.navigation_controller.start_navigation(self._paused_target_location)
+        self._paused_target_location = None
+        return True
 
 
 class ReturnToBaseExecutor(BaseMissionExecutor):

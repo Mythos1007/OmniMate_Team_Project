@@ -33,6 +33,9 @@ class Mission:
         expires_at: datetime | None = None,
         requires_confirmation: bool = False,
     ) -> "Mission":
+        payload = dict(command.payload)
+        if command.raw_text and "source_text" not in payload:
+            payload["source_text"] = command.raw_text
         return cls(
             mission_id=str(uuid4()),
             mission_type=command.mission_type,
@@ -43,7 +46,7 @@ class Mission:
             target_user=command.target_user,
             target_location=command.target_location,
             requires_confirmation=requires_confirmation,
-            payload=dict(command.payload),
+            payload=payload,
             requires_movement=command.requires_movement,
         )
 

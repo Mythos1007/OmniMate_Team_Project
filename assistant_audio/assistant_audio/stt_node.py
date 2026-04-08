@@ -17,6 +17,9 @@ import rclpy
 from rclpy.node import Node
 
 
+_ASSISTANT_COMMAND_TOPIC = '/assistant/command_text'
+
+
 class STTNode(Node):
     """웨이크 이벤트 수신 후 음성 인식 결과 메시지 발행 기능.
 
@@ -44,11 +47,24 @@ class STTNode(Node):
         self.declare_parameter('whisper_compute_type', 'int8')
         self.declare_parameter('whisper_device', 'cpu')
         self.declare_parameter('whisper_beam_size', 5)
+        self.declare_parameter('wake_topic', '/assistant/wake_detected')
+        self.declare_parameter('command_topic', _ASSISTANT_COMMAND_TOPIC)
+        self.declare_parameter('status_topic', '/assistant/status_text')
+        self.declare_parameter('enabled_topic', '')
+        self.declare_parameter('voice_input_enabled', True)
 
+        self._voice_input_enabled = bool(self.get_parameter('voice_input_enabled').value)
+        self._wake_topic = str(self.get_parameter('wake_topic').value)
+        self._command_topic = str(self.get_parameter('command_topic').value)
+        self._status_topic = str(self.get_parameter('status_topic').value)
+        self._enabled_topic = str(self.get_parameter('enabled_topic').value).strip()
         self._provider = self._create_provider()
         self._transcript_publisher = self.create_publisher(VoiceTranscript, '/assistant/transcript', 10)
-        self._status_publisher = self.create_publisher(String, '/assistant/status_text', 10)
-        self.create_subscription(Bool, '/assistant/wake_detected', self._on_wake_detected, 10)
+        self._command_text_publisher = self.create_publisher(String, self._command_topic, 10)
+        self._status_publisher = self.create_publisher(String, self._status_topic, 10)
+        self.create_subscription(Bool, self._wake_topic, self._on_wake_detected, 10)
+        if self._enabled_topic:
+            self.create_subscription(Bool, self._enabled_topic, self._on_voice_input_enabled, 10)
 
         self._pending_timer = None
         self._transcription_thread = None
@@ -93,6 +109,8 @@ class STTNode(Node):
         return MockSTTProvider(sample_text=mock_transcript, confidence=mock_confidence)
 
     def _on_wake_detected(self, message: Bool) -> None:
+        if not self._voice_input_enabled:
+            return
         if not message.data:
             return
         if self._listening_active:
@@ -102,7 +120,7 @@ class STTNode(Node):
         delay = float(self.get_parameter('transcription_delay_sec').value)
         self._listening_active = True
         self._wake_started_monotonic = time.monotonic()
-        self._status_publisher.publish(String(data='Listening for user speech.'))
+        self._status_publisher.publish(String(data='STATE:LISTENING'))
         if self._uses_mock_provider() and delay > 0.0:
             self.get_logger().info(f'Wake word received. Mock transcription will be published in {delay:.1f}s.')
             self._pending_timer = self.create_timer(delay, self._begin_transcription)
@@ -130,6 +148,12 @@ class STTNode(Node):
             self._listening_active = False
             return
 
+        if not self._voice_input_enabled:
+            self.get_logger().info('STT result ignored because voice input is disabled.')
+            self._listening_active = False
+            self._wake_started_monotonic = None
+            return
+
         transcript = VoiceTranscript()
         transcript.stamp = self.get_clock().now().to_msg()
         transcript.text = text
@@ -137,10 +161,24 @@ class STTNode(Node):
         transcript.wake_word_used = True
 
         self._transcript_publisher.publish(transcript)
+        self._command_text_publisher.publish(String(data=text))
+        self._status_publisher.publish(String(data='STATE:PROCESSING'))
         self._status_publisher.publish(String(data=f'Transcript ready: {text}'))
         self._log_transcription_latency('completed')
         self.get_logger().info(f'Published transcript: "{text}" ({confidence:.2f})')
         self._listening_active = False
+
+    def _on_voice_input_enabled(self, message: Bool) -> None:
+        self._voice_input_enabled = bool(message.data)
+        if not self._voice_input_enabled:
+            if self._pending_timer is not None:
+                self._pending_timer.cancel()
+                self.destroy_timer(self._pending_timer)
+                self._pending_timer = None
+            self._listening_active = False
+            self._wake_started_monotonic = None
+        state_text = 'enabled' if self._voice_input_enabled else 'disabled'
+        self.get_logger().info(f'STT voice input {state_text}.')
 
     def _uses_mock_provider(self) -> bool:
         return isinstance(self._provider, MockSTTProvider)
@@ -161,4 +199,5 @@ def main(args: list[str] | None = None) -> None:
         rclpy.spin(node)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

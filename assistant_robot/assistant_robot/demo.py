@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import logging
 
+from assistant_robot.adapters.place_resolving_navigation_controller import PlaceResolvingNavigationController
 from assistant_robot.adapters.mock_confirmation_service import MockConfirmationService
 from assistant_robot.adapters.mock_intent_parser import MockIntentParser
 from assistant_robot.adapters.mock_navigation_controller import MockNavigationController
@@ -22,29 +23,40 @@ from assistant_robot.orchestrator.mission_queue import MissionQueue
 from assistant_robot.orchestrator.next_mission_resolver import NextMissionResolver
 from assistant_robot.orchestrator.omni_orchestrator import OmniOrchestrator
 from assistant_robot.orchestrator.state_machine import RobotStateMachine
+from assistant_robot.interfaces.confirmation_service import BaseConfirmationService
+from assistant_robot.interfaces.navigation_controller import BaseNavigationController
 from assistant_robot.services.greeting_manager import GreetingManager
+from assistant_robot.services.runtime_data_service import RuntimeDataService
 from assistant_robot.services.tts_manager import TTSManager
 from assistant_robot.services.tts_script_manager import TTSScriptManager
 from assistant_robot.services.weather_formatter import WeatherFormatter
+from assistant_robot.interfaces.tts_provider import BaseTTSProvider
 
 
-def build_mock_orchestrator(*, tts_profile: str = "default") -> tuple[OmniOrchestrator, MockTTSProvider]:
+def build_mock_orchestrator(
+    *,
+    tts_profile: str = "default",
+    navigation_controller: BaseNavigationController | None = None,
+    confirmation_service: BaseConfirmationService | None = None,
+    tts_provider: BaseTTSProvider | None = None,
+) -> tuple[OmniOrchestrator, BaseTTSProvider]:
     """기능: 실제 외부 모듈 없이 전체 흐름을 검증할 수 있는 조립 함수."""
 
     logger = logging.getLogger("assistant_robot.demo")
     queue = MissionQueue()
     battery_policy = BatteryPolicy()
     state_machine = RobotStateMachine(battery_policy)
-    tts_provider = MockTTSProvider()
+    tts_provider = tts_provider or MockTTSProvider()
     script_manager = TTSScriptManager(profile=tts_profile)
     tts_manager = TTSManager(tts_provider, script_manager)
+    navigation_controller = navigation_controller or PlaceResolvingNavigationController(MockNavigationController())
     context = ExecutorContext(
-        # TODO: 조원 코드가 준비되면 아래 mock들을 실제 adapter 구현으로 교체.
-        navigation_controller=MockNavigationController(),
-        confirmation_service=MockConfirmationService(),
+        navigation_controller=navigation_controller,
+        confirmation_service=confirmation_service or MockConfirmationService(),
         weather_provider=MockWeatherProvider(),
         weather_formatter=WeatherFormatter(),
         logger=logger,
+        runtime_data_service=RuntimeDataService(),
     )
     dispatcher = MissionDispatcher(
         {

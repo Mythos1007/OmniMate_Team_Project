@@ -123,12 +123,14 @@ class FaceController(QObject):
         mapping = {
             "IDLE": FaceBaseState.IDLE,
             "SLEEPING": FaceBaseState.IDLE,
+            "EXECUTING": FaceBaseState.NAVIGATING,
             "PROCESSING": FaceBaseState.THINKING,
             "RESPONDING": FaceBaseState.WAITING_CONFIRMATION,
             "ACTING": FaceBaseState.NAVIGATING,
             "WAITING_CONFIRMATION": FaceBaseState.WAITING_CONFIRMATION,
             "CHARGING": FaceBaseState.CHARGING,
             "LOW_BATTERY": FaceBaseState.LOW_BATTERY,
+            "LOW_BATTERY_RESTRICTED": FaceBaseState.LOW_BATTERY,
             "ERROR": FaceBaseState.ERROR,
             "EMERGENCY_STOP": FaceBaseState.EMERGENCY_STOP,
         }
@@ -151,6 +153,13 @@ class FaceController(QObject):
 
     def on_listening_finished(self) -> None:
         self.state_manager.clear_transient_base_state()
+
+    def on_processing_started(self, duration_sec: float = 1.4) -> None:
+        self.state_manager.set_transient_base_state(FaceBaseState.THINKING, duration_sec)
+
+    def on_processing_finished(self) -> None:
+        if self.state_manager.context.transient_base_state == FaceBaseState.THINKING:
+            self.state_manager.clear_transient_base_state()
 
     def on_person_recognized(self, name: str) -> None:
         self._logger.debug("Person recognized: %s", name)

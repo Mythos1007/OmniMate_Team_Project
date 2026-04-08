@@ -109,7 +109,14 @@ class RobotStateMachine:
         elif state.top_state == TopState.EXECUTING:
             state.status_message_for_gui = f"현재 작업 중, 대기열 {state.pending_count}건"
         elif state.top_state == TopState.WAITING_CONFIRMATION:
-            state.status_message_for_gui = "확인 응답을 기다리는 중입니다."
+            if state.current_mission_type == "medication":
+                state.status_message_for_gui = "복약 확인 응답을 기다리는 중입니다."
+            elif state.current_mission_type == "delivery":
+                state.status_message_for_gui = "전달 확인 응답을 기다리는 중입니다."
+            elif state.current_mission_type == "alarm":
+                state.status_message_for_gui = "알림 확인 응답을 기다리는 중입니다."
+            else:
+                state.status_message_for_gui = "확인 응답을 기다리는 중입니다."
         elif state.top_state == TopState.CHARGING:
             if state.charging_eta_minutes is not None:
                 state.status_message_for_gui = f"충전 중입니다. 약 {state.charging_eta_minutes}분 남았습니다."

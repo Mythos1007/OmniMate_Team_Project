@@ -12,9 +12,11 @@ class AlarmExecution(BaseMissionExecution):
         super().__init__(mission, context)
         self._phase = 0
         self._navigation: NavigationHandle | None = None
+        self._paused_target_location: str | None = None
 
     def step(self) -> MissionEvent:
         target_location = self.mission.target_location or "알림 위치"
+        announcement_text = str(self.mission.payload.get("announcement_text", "")).strip()
         if self._phase == 0:
             self._phase = 1
             return MissionEvent(
@@ -49,8 +51,9 @@ class AlarmExecution(BaseMissionExecution):
             return MissionEvent(
                 mission_id=self.mission.mission_id,
                 event_type="waiting_confirmation",
-                message_key=message_key,
+                message_key=None if announcement_text else message_key,
                 message_params={"user_name": self.mission.target_user or "사용자"},
+                details={"speak_text": announcement_text} if announcement_text else {},
             )
         confirmed = self.context.confirmation_service.wait_for_confirmation(mission_id=self.mission.mission_id)
         if self.mission.payload.get("medication") and confirmed:
@@ -68,6 +71,25 @@ class AlarmExecution(BaseMissionExecution):
             terminal=True,
             details={"status": MissionStatus.COMPLETED.value if confirmed else MissionStatus.FAILED.value},
         )
+
+    def cancel(self) -> None:
+        if self._navigation is not None:
+            self.context.navigation_controller.cancel_navigation(self._navigation)
+
+    def pause_navigation(self) -> bool:
+        if self._phase != 2 or self._navigation is None:
+            return False
+        self._paused_target_location = self._navigation.target_location
+        self.context.navigation_controller.cancel_navigation(self._navigation)
+        self._navigation = None
+        return True
+
+    def resume_navigation(self) -> bool:
+        if self._phase != 2 or not self._paused_target_location:
+            return False
+        self._navigation = self.context.navigation_controller.start_navigation(self._paused_target_location)
+        self._paused_target_location = None
+        return True
 
 
 class AlarmExecutor(BaseMissionExecutor):

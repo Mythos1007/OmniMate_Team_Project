@@ -53,11 +53,14 @@ class HomePage(QWidget):
         self._speed_samples: deque[float] = deque(maxlen=8)
         map_lay.addWidget(self.map_view, stretch=1)
         dest_lay = QHBoxLayout()
-        for d in ["로비", "회의실 A", "탕비실"]:
-            dest_lay.addWidget(QPushButton(d))
+        self._destination_button_layout = dest_lay
+        self._destination_buttons: list[QPushButton] = []
         stop_btn = QPushButton("안내 중지")
         stop_btn.setProperty("class", "StopBtn")
+        stop_btn.clicked.connect(self._stop_navigation)
+        self._stop_button = stop_btn
         dest_lay.addWidget(stop_btn)
+        self.refresh_quick_destinations()
         map_lay.addLayout(dest_lay)
         left_layout.addWidget(map_frame)
         layout.addLayout(left_layout, stretch=6)
@@ -66,7 +69,7 @@ class HomePage(QWidget):
 
         self.weather_card = QPushButton()
         self.weather_card.setObjectName("weather_card_btn")
-        self.weather_card.setMinimumHeight(180)
+        self.weather_card.setMinimumHeight(132)
         self.weather_card.clicked.connect(lambda: self.main_window.switch_page(10, manual=True))
 
         w_inner = QHBoxLayout(self.weather_card)
@@ -297,6 +300,72 @@ class HomePage(QWidget):
             if not ok:
                 self.st_main.setText("이동 명령 전송 실패")
                 self.st_sub.setText(message)
+
+    def refresh_quick_destinations(self) -> None:
+        while self._destination_buttons:
+            button = self._destination_buttons.pop()
+            self._destination_button_layout.removeWidget(button)
+            button.deleteLater()
+
+        names: list[str] = []
+        if hasattr(self.main_window, "get_quick_destination_names"):
+            try:
+                names = list(self.main_window.get_quick_destination_names(limit=4))
+            except Exception:
+                names = []
+
+        for name in names:
+            button = QPushButton(str(name))
+            button.clicked.connect(lambda checked=False, place_name=str(name): self._navigate_to_named_place(place_name))
+            self._destination_button_layout.insertWidget(max(self._destination_button_layout.count() - 1, 0), button)
+            self._destination_buttons.append(button)
+
+        if not names:
+            placeholder = QPushButton("등록된 장소 없음")
+            placeholder.setEnabled(False)
+            self._destination_button_layout.insertWidget(max(self._destination_button_layout.count() - 1, 0), placeholder)
+            self._destination_buttons.append(placeholder)
+
+    def _navigate_to_named_place(self, place_name: str) -> None:
+        place = None
+        if hasattr(self.main_window, "get_named_place_lookup"):
+            try:
+                place = self.main_window.get_named_place_lookup().get(place_name)
+            except Exception:
+                place = None
+        if not isinstance(place, dict):
+            QMessageBox.warning(self, "장소 이동 실패", f"'{place_name}' 좌표를 찾지 못했습니다.")
+            return
+
+        try:
+            x_m = float(place.get("x", 0.0))
+            y_m = float(place.get("y", 0.0))
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "장소 이동 실패", f"'{place_name}' 좌표 값이 올바르지 않습니다.")
+            return
+
+        self.map_view.set_nav_target_preview(x_m, y_m)
+        self.map_view.draw_path_to_target(x_m, y_m)
+        path_len = self.map_view.get_path_length_m()
+        if path_len is None:
+            self.st_main.setText("경로 생성 실패")
+            self.st_sub.setText(f"{place_name}까지의 통로를 찾지 못했습니다.")
+            return
+
+        self.st_main.setText(f"{place_name} 이동 중...")
+        self.st_sub.setText(f"목표까지 약 {path_len:.1f}m")
+
+        if hasattr(self.main_window, "send_nav_to_named_place"):
+            ok, message = self.main_window.send_nav_to_named_place(place_name)
+            if not ok:
+                self.st_main.setText("이동 명령 전송 실패")
+                self.st_sub.setText(message)
+
+    def _stop_navigation(self) -> None:
+        if hasattr(self.main_window, "submit_command_text"):
+            ok, message = self.main_window.submit_command_text("중지해줘")
+            if not ok:
+                QMessageBox.warning(self, "안내 중지 실패", message)
 
     def update_ui(self):
         self.temp_lbl.setText(self.engine.temp)

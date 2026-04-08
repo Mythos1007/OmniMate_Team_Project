@@ -9,6 +9,9 @@
 import re
 import sys
 import os
+import json
+import importlib
+import math
 import shutil
 import subprocess
 import tempfile
@@ -18,9 +21,13 @@ import threading
 import time
 from datetime import datetime
 
+import yaml
+
 CURRENT_DIR = Path(__file__).resolve().parent
 PACKAGE_PARENT = CURRENT_DIR.parent
-for candidate in (PACKAGE_PARENT, CURRENT_DIR):
+ROBOT_PACKAGE_PARENT = PACKAGE_PARENT.parent / "assistant_robot"
+ROBOT_NAMED_PLACE_CONFIG = ROBOT_PACKAGE_PARENT / "assistant_robot" / "config" / "named_places.yaml"
+for candidate in (PACKAGE_PARENT, CURRENT_DIR, ROBOT_PACKAGE_PARENT):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
@@ -53,6 +60,13 @@ try:
     from assistant_gui.pages.home_page import HomePage
     from assistant_gui.pages.settings_page import SettingsPage
     from assistant_gui.config.app_constants import TTS_SCENARIO_DEFAULTS
+    from assistant_gui.engines.wakeword_runtime import (
+        GUI_WAKEWORD_VARIANTS,
+        GlobalWakewordController,
+        extract_command_after_wakeword,
+        is_wakeword_detected,
+    )
+    from assistant_gui.engines.voice_response_builder import build_contextual_voice_response
 except ModuleNotFoundError:
     # Keep direct script execution support (python main.py)
     from engines.weather_engine import WeatherEngine
@@ -78,6 +92,13 @@ except ModuleNotFoundError:
     from pages.home_page import HomePage
     from pages.settings_page import SettingsPage
     from config.app_constants import TTS_SCENARIO_DEFAULTS
+    from engines.wakeword_runtime import (
+        GUI_WAKEWORD_VARIANTS,
+        GlobalWakewordController,
+        extract_command_after_wakeword,
+        is_wakeword_detected,
+    )
+    from engines.voice_response_builder import build_contextual_voice_response
 
 
 class OmniMateMain(QMainWindow):
@@ -88,18 +109,27 @@ class OmniMateMain(QMainWindow):
         self._voice_only_face_mode = os.getenv("ASSISTANT_VOICE_ONLY_FACE_MODE", "1").strip() in {"1", "true", "TRUE"}
         self._manual_navigation_active = False
         self._manual_navigation_until = 0.0
-        self._face_voice_loop_enabled = os.getenv("ASSISTANT_FACE_VOICE_LOOP", "1").strip() in {"1", "true", "TRUE"}
-        self._face_voice_loop_active = False
-        self._face_voice_stage = "wakeword"
-        self._face_voice_worker = None
-        self._face_voice_command_started_at = 0.0
-        self._face_voice_silence_retries = 0
+        default_face_voice_loop = os.getenv("ASSISTANT_FACE_VOICE_LOOP", "1").strip() in {"1", "true", "TRUE"}
+        self._face_voice_loop_enabled = str(
+            self._settings.value("voice/pc_local_voice_enabled", "true" if default_face_voice_loop else "false")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._robot_voice_input_enabled = str(
+            self._settings.value("voice/robot_voice_input_enabled", "false")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._person_greeting_enabled = str(
+            self._settings.value("behavior/person_greeting_enabled", "false")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._person_greeting_suspend_reasons: set[str] = set()
+        self._face_voice_wake_listen_sec = float(os.getenv("ASSISTANT_FACE_WAKE_LISTEN_SEC", "8"))
+        self._face_voice_command_listen_sec = float(os.getenv("ASSISTANT_FACE_COMMAND_LISTEN_SEC", "4"))
+        self._face_voice_wake_restart_delay_ms = int(os.getenv("ASSISTANT_FACE_WAKE_RESTART_DELAY_MS", "180"))
+        self._face_voice_command_restart_delay_ms = int(os.getenv("ASSISTANT_FACE_COMMAND_RESTART_DELAY_MS", "100"))
         self._face_voice_command_timeout_sec = float(os.getenv("ASSISTANT_FACE_COMMAND_TIMEOUT_SEC", "10"))
         self._face_voice_max_silence_retries = int(os.getenv("ASSISTANT_FACE_COMMAND_SILENCE_RETRIES", "2"))
-        self._face_voice_pause_until = 0.0
         self._default_voice_backend = str(self._settings.value("voice/default_backend", "auto"))
         self._default_edge_voice = str(self._settings.value("voice/edge_voice", "ko-KR-SunHiNeural"))
         self._wakeword_reply_only = str(self._settings.value("voice/wakeword_reply_only", "false")).lower() in {"1", "true", "yes"}
+        self._robot_speaker_volume = int(self._settings.value("voice/robot_speaker_volume", 35))
         self._tts_defaults: dict[str, str] = {key: default for key, _label, default in TTS_SCENARIO_DEFAULTS}
         self._tts_labels: dict[str, str] = {key: label for key, label, _default in TTS_SCENARIO_DEFAULTS}
         self._tts_templates: dict[str, str] = {}
@@ -122,7 +152,8 @@ class OmniMateMain(QMainWindow):
         self.pose_engine.start()
 
         self.setWindowTitle("OmniMate - AI Robot Dashboard")
-        self.resize(1600, 600)
+        self.setMinimumSize(900, 360)
+        self.resize(1600, 560)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -211,6 +242,7 @@ class OmniMateMain(QMainWindow):
         self.stacked_widget.addWidget(TtsTestPage(self))                              # 11. TTS 테스트
         self.gesture_page = GesturePage(self)
         self.stacked_widget.addWidget(self.gesture_page)                              # 12. 수취 확인/복귀 제스처
+        self._global_wakeword_controller = GlobalWakewordController(self)
         # 처음 시작은 로봇 표정 화면으로
         self.switch_page(0)
 
@@ -226,6 +258,7 @@ class OmniMateMain(QMainWindow):
         self._refresh_runtime_capability_status()
 
         self._restore_ui_preferences()
+        QTimer.singleShot(1800, self._sync_remote_audio_preferences)
         QTimer.singleShot(1200, self._sync_face_voice_loop)
 
     def _restore_ui_preferences(self) -> None:
@@ -241,12 +274,24 @@ class OmniMateMain(QMainWindow):
         voice_backend = str(self._settings.value("voice/default_backend", self._default_voice_backend))
         edge_voice = str(self._settings.value("voice/edge_voice", self._default_edge_voice))
         wakeword_reply_only = str(self._settings.value("voice/wakeword_reply_only", "true" if self._wakeword_reply_only else "false"))
+        robot_speaker_volume = int(self._settings.value("voice/robot_speaker_volume", self._robot_speaker_volume))
+        pc_local_voice_enabled = str(self._settings.value("voice/pc_local_voice_enabled", "true" if self._face_voice_loop_enabled else "false"))
+        robot_voice_input_enabled = str(self._settings.value("voice/robot_voice_input_enabled", "true" if self._robot_voice_input_enabled else "false"))
         self.apply_default_voice_backend(voice_backend)
         self.apply_default_edge_voice(edge_voice)
         self.apply_wakeword_reply_only(wakeword_reply_only)
+        if not self.is_microphone_available():
+            pc_local_voice_enabled = "false"
+        self.apply_pc_local_voice_enabled(pc_local_voice_enabled)
+        self.apply_robot_voice_input_enabled(robot_voice_input_enabled, publish=False)
+        self.apply_person_greeting_enabled(
+            str(self._settings.value("behavior/person_greeting_enabled", "true" if self._person_greeting_enabled else "false")),
+            publish=False,
+        )
+        self.apply_robot_speaker_volume(robot_speaker_volume, publish=False)
 
         width = int(self._settings.value("window/width", 1600))
-        height = int(self._settings.value("window/height", 600))
+        height = int(self._settings.value("window/height", 560))
         self.resize(width, height)
         self._pref_fullscreen = str(self._settings.value("window/fullscreen", "false")).lower() in {"1", "true", "yes"}
 
@@ -302,7 +347,7 @@ class OmniMateMain(QMainWindow):
 
     def apply_window_size(self, width: int, height: int) -> None:
         width = max(800, min(3840, int(width)))
-        height = max(480, min(2160, int(height)))
+        height = max(360, min(2160, int(height)))
         self.resize(width, height)
         self._settings.setValue("window/width", width)
         self._settings.setValue("window/height", height)
@@ -354,6 +399,55 @@ class OmniMateMain(QMainWindow):
         else:
             self._wakeword_reply_only = bool(enabled)
         self._settings.setValue("voice/wakeword_reply_only", self._wakeword_reply_only)
+
+    def apply_pc_local_voice_enabled(self, enabled) -> None:
+        if isinstance(enabled, str):
+            self._face_voice_loop_enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            self._face_voice_loop_enabled = bool(enabled)
+        self._settings.setValue("voice/pc_local_voice_enabled", self._face_voice_loop_enabled)
+        if hasattr(self, "_global_wakeword_controller"):
+            self._sync_face_voice_loop()
+
+    def apply_robot_voice_input_enabled(
+        self,
+        enabled,
+        *,
+        publish: bool = False,
+    ) -> tuple[bool, str]:
+        if isinstance(enabled, str):
+            self._robot_voice_input_enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            self._robot_voice_input_enabled = bool(enabled)
+        self._settings.setValue("voice/robot_voice_input_enabled", self._robot_voice_input_enabled)
+        if not publish:
+            label = "활성" if self._robot_voice_input_enabled else "비활성"
+            return True, f"로봇 음성 입력 기본값을 {label}으로 저장했습니다."
+        return self.publish_robot_voice_input_enabled(self._robot_voice_input_enabled)
+
+    def apply_robot_speaker_volume(self, value: int, *, publish: bool = False) -> tuple[bool, str]:
+        volume = max(0, min(100, int(value)))
+        self._robot_speaker_volume = volume
+        self._settings.setValue("voice/robot_speaker_volume", volume)
+        if not publish:
+            return True, f"로봇 스피커 볼륨 기본값을 {volume}%로 저장했습니다."
+        return self.publish_robot_speaker_volume(volume)
+
+    def apply_person_greeting_enabled(
+        self,
+        enabled,
+        *,
+        publish: bool = False,
+    ) -> tuple[bool, str]:
+        if isinstance(enabled, str):
+            self._person_greeting_enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
+        else:
+            self._person_greeting_enabled = bool(enabled)
+        self._settings.setValue("behavior/person_greeting_enabled", self._person_greeting_enabled)
+        if not publish:
+            label = "활성" if self._person_greeting_enabled else "비활성"
+            return True, f"사람 인사 로직 기본값을 {label}으로 저장했습니다."
+        return self.publish_person_greeting_enabled(self._person_greeting_enabled)
 
     def _load_tts_templates(self) -> None:
         loaded: dict[str, str] = {}
@@ -460,9 +554,105 @@ class OmniMateMain(QMainWindow):
         return "unknown"
 
     def build_situation_response_text(self, command_text: str) -> str:
-        scenario_key = self.classify_tts_scenario(command_text)
-        context = self.build_tts_runtime_context(command_text)
-        return self.render_tts_scenario(scenario_key, context)
+        return build_contextual_voice_response(self, command_text)
+
+    def _get_runtime_data_service(self):
+        try:
+            runtime_module = importlib.import_module("assistant_robot.services.runtime_data_service")
+            runtime_service_class = getattr(runtime_module, "RuntimeDataService")
+        except Exception:
+            return None
+        medication_path = ""
+        if hasattr(self, "medication_page") and hasattr(self.medication_page, "med_mgr"):
+            medication_path = str(getattr(self.medication_page.med_mgr, "filename", ""))
+        return runtime_service_class(
+            schedule_path=str(getattr(self.schedule_mgr, "filename", "")),
+            alarm_path=str(getattr(self.alarm_mgr, "filename", "")),
+            medication_path=medication_path,
+        )
+
+    @staticmethod
+    def _is_schedule_add_command(text: str) -> bool:
+        return bool(re.search(r"(일정|스케줄|약속).*(추가|등록)", str(text or "")))
+
+    @staticmethod
+    def _is_alarm_add_command(text: str) -> bool:
+        return bool(re.search(r"알람\s*(맞춰\s*줘|설정\s*해\s*줘|추가\s*해\s*줘|등록\s*해\s*줘)", str(text or "")))
+
+    @staticmethod
+    def _is_medication_add_command(text: str) -> bool:
+        return bool(re.search(r"(복약|약).*(추가|등록)", str(text or "")))
+
+    def _is_always_local_voice_command(self, command_text: str) -> bool:
+        scenario = self.classify_tts_scenario(command_text)
+        if scenario in {
+            "wakeword_prompt",
+            "schedule_query",
+            "alarm_set",
+            "alarm_query",
+            "medication_query",
+            "weather",
+        }:
+            return True
+        return (
+            self._is_schedule_add_command(command_text)
+            or self._is_alarm_add_command(command_text)
+            or self._is_medication_add_command(command_text)
+        )
+
+    def _can_fallback_to_local_voice_command(self, command_text: str) -> bool:
+        scenario = self.classify_tts_scenario(command_text)
+        return scenario in {"cancel", "where_status"} or self._is_always_local_voice_command(command_text)
+
+    def _refresh_local_data_views(self) -> None:
+        try:
+            if hasattr(self, "schedule_mgr"):
+                self.schedule_mgr.load_data()
+            if hasattr(self, "schedule_page") and hasattr(self.schedule_page, "update_schedule_list"):
+                self.schedule_page.update_schedule_list()
+            if hasattr(self, "alarm_mgr"):
+                self.alarm_mgr.load_data()
+            if hasattr(self, "alarm_page") and hasattr(self.alarm_page, "update_list"):
+                self.alarm_page.update_list()
+            if hasattr(self, "medication_page") and hasattr(self.medication_page, "med_mgr"):
+                self.medication_page.med_mgr.load_data()
+            if hasattr(self, "medication_page") and hasattr(self.medication_page, "update_list"):
+                self.medication_page.update_list()
+            if hasattr(self, "medication_page") and hasattr(self.medication_page, "update_status_logic"):
+                self.medication_page.update_status_logic()
+        except Exception:
+            pass
+
+    def build_local_voice_response(self, command_text: str) -> str:
+        runtime_data = self._get_runtime_data_service()
+        text = str(command_text or "").strip()
+        if runtime_data is not None:
+            if self._is_schedule_add_command(text):
+                response = runtime_data.add_schedule_from_text(text)
+                self._refresh_local_data_views()
+                return response
+            if self._is_alarm_add_command(text):
+                response = runtime_data.add_alarm_from_text(text)
+                self._refresh_local_data_views()
+                return response
+            if self._is_medication_add_command(text):
+                response = runtime_data.add_medication_from_text(text)
+                self._refresh_local_data_views()
+                return response
+        return self.build_situation_response_text(text)
+
+    def dispatch_voice_command(self, command_text: str) -> tuple[bool, str, bool]:
+        text = str(command_text or "").strip()
+        if not text:
+            return False, "빈 명령입니다.", False
+
+        if self._is_always_local_voice_command(text):
+            return True, self.build_local_voice_response(text), True
+
+        submitted, message = self.submit_command_text(text)
+        if not submitted and self._can_fallback_to_local_voice_command(text):
+            return True, self.build_local_voice_response(text), True
+        return submitted, message, False
 
     def speak_text(self, text: str, *, target: str = "pc") -> tuple[bool, str]:
         if target == "robot":
@@ -476,36 +666,137 @@ class OmniMateMain(QMainWindow):
             f"(기본 음성 엔진: {selected}, edge-tts/spd-say/espeak-ng 설치/상태 확인 필요)"
         )
 
+    def submit_command_text(self, command_text: str) -> tuple[bool, str]:
+        text = str(command_text or "").strip()
+        if not text:
+            return False, "빈 명령입니다."
+        return self._publish_string_topic("/assistant/command_text", text)
+
     def send_nav_to_coordinate(self, x_m: float, y_m: float) -> tuple[bool, str]:
         """지도 클릭 좌표 기반 로봇 이동 명령 발행 기능."""
-        if not shutil.which("ros2"):
-            return False, "ros2 CLI를 찾을 수 없습니다."
-
         msg_data = f"navigate:x={x_m:.3f},y={y_m:.3f}"
-        msg_arg = f'{{data: "{msg_data}"}}'
-        cmd = [
-            "ros2", "topic", "pub", "--once",
-            "-w", "1", "--max-wait-time-secs", "1",
-            "/assistant/gui_command_text", "std_msgs/msg/String", msg_arg,
-        ]
+        return self.submit_command_text(msg_data)
 
-        ros_env = os.environ.copy()
-        ros_env.setdefault("ROS_DOMAIN_ID", "142")
-        ros_env.setdefault("ROS_LOCALHOST_ONLY", "0")
-        ros_env.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
-        ros_env.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "SUBNET")
-        robot_peer_ip = ros_env.get("ASSISTANT_ROBOT_IP", "").strip()
-        if robot_peer_ip:
-            ros_env["ROS_STATIC_PEERS"] = robot_peer_ip
+    def send_nav_to_named_place(self, place_name: str) -> tuple[bool, str]:
+        name = str(place_name or "").strip()
+        if not name:
+            return False, "장소 이름이 비어 있습니다."
+        return self.submit_command_text(f"{name}으로 안내해줘")
 
+    def _load_named_place_document(self) -> dict:
+        config_path = ROBOT_NAMED_PLACE_CONFIG
+        if not config_path.exists():
+            return {"medication_targets": [], "named_places": {}}
+        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        return loaded if isinstance(loaded, dict) else {"medication_targets": [], "named_places": {}}
+
+    @staticmethod
+    def _yaw_from_metadata(metadata: dict) -> float:
+        if "yaw" in metadata:
+            try:
+                return float(metadata.get("yaw", 0.0))
+            except (TypeError, ValueError):
+                return 0.0
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=ros_env)
-            if result.returncode != 0:
-                err = result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패"
-                return False, err
-            return True, "ok"
-        except Exception as exc:
-            return False, str(exc)
+            orientation_z = float(metadata.get("orientation_z", 0.0))
+            orientation_w = float(metadata.get("orientation_w", 1.0))
+            return math.atan2(2.0 * orientation_w * orientation_z, 1.0 - 2.0 * orientation_z * orientation_z)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def get_named_place_items(self) -> list[dict[str, object]]:
+        document = self._load_named_place_document()
+        raw_places = document.get("named_places", {})
+        if not isinstance(raw_places, dict):
+            return []
+
+        items: list[dict[str, object]] = []
+        for name, metadata in raw_places.items():
+            if not isinstance(metadata, dict):
+                continue
+            aliases = metadata.get("aliases", [])
+            if not isinstance(aliases, list):
+                aliases = []
+            items.append(
+                {
+                    "name": str(name).strip(),
+                    "source": str(metadata.get("source", "waypoints")).strip() or "waypoints",
+                    "frame_id": str(metadata.get("frame_id", "map")).strip() or "map",
+                    "x": float(metadata.get("x", 0.0)),
+                    "y": float(metadata.get("y", 0.0)),
+                    "yaw": self._yaw_from_metadata(metadata),
+                    "aliases": [str(alias).strip() for alias in aliases if str(alias).strip()],
+                    "ocr_enabled": bool(metadata.get("ocr_enabled", False)),
+                }
+            )
+        return items
+
+    def get_named_place_lookup(self) -> dict[str, dict[str, object]]:
+        return {str(item.get("name", "")): item for item in self.get_named_place_items() if str(item.get("name", "")).strip()}
+
+    def get_quick_destination_names(self, *, limit: int = 4) -> list[str]:
+        preferred = [item["name"] for item in self.get_named_place_items() if item.get("name") and item.get("name") != "home"]
+        if not preferred:
+            preferred = [item["name"] for item in self.get_named_place_items() if item.get("name")]
+        return [str(name) for name in preferred[: max(1, int(limit))]]
+
+    def save_named_place_items(self, items: list[dict[str, object]]) -> tuple[bool, str]:
+        existing_lookup = self.get_named_place_lookup()
+        named_places: dict[str, dict[str, object]] = {}
+        for item in items:
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+
+            aliases_value = item.get("aliases", [])
+            if isinstance(aliases_value, str):
+                aliases = [alias.strip() for alias in aliases_value.split(",") if alias.strip()]
+            elif isinstance(aliases_value, list):
+                aliases = [str(alias).strip() for alias in aliases_value if str(alias).strip()]
+            else:
+                aliases = []
+            if name not in aliases:
+                aliases.insert(0, name)
+
+            try:
+                x_value = float(item.get("x", 0.0))
+                y_value = float(item.get("y", 0.0))
+                yaw_value = float(item.get("yaw", 0.0))
+            except (TypeError, ValueError):
+                return False, f"장소 '{name}'의 좌표 또는 yaw 값이 올바르지 않습니다."
+
+            named_places[name] = {
+                "source": str(item.get("source", existing_lookup.get(name, {}).get("source", "waypoints"))).strip() or "waypoints",
+                "frame_id": str(item.get("frame_id", "map")).strip() or "map",
+                "x": round(x_value, 3),
+                "y": round(y_value, 3),
+                "yaw": round(yaw_value, 3),
+                "aliases": aliases,
+                "ocr_enabled": bool(item.get("ocr_enabled", False)),
+            }
+
+        document = self._load_named_place_document()
+        medication_targets = document.get("medication_targets", [])
+        if not isinstance(medication_targets, list):
+            medication_targets = []
+
+        config_path = ROBOT_NAMED_PLACE_CONFIG
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "medication_targets": medication_targets,
+                    "named_places": named_places,
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        if hasattr(self, "home_page") and self.home_page is not None and hasattr(self.home_page, "refresh_quick_destinations"):
+            self.home_page.refresh_quick_destinations()
+        return True, f"장소 {len(named_places)}개를 저장했습니다."
 
     def publish_tts_to_robot(self, text: str) -> tuple[bool, str]:
         if not shutil.which("ros2"):
@@ -519,14 +810,7 @@ class OmniMateMain(QMainWindow):
             "/assistant/speak", "std_msgs/msg/String", msg_arg,
         ]
 
-        ros_env = os.environ.copy()
-        ros_env.setdefault("ROS_DOMAIN_ID", "142")
-        ros_env.setdefault("ROS_LOCALHOST_ONLY", "0")
-        ros_env.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
-        ros_env.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "SUBNET")
-        robot_peer_ip = ros_env.get("ASSISTANT_ROBOT_IP", "").strip()
-        if robot_peer_ip:
-            ros_env["ROS_STATIC_PEERS"] = robot_peer_ip
+        ros_env = self._build_ros_cli_env()
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=ros_env)
@@ -543,6 +827,172 @@ class OmniMateMain(QMainWindow):
             if "Connection refused" in message or "연결이 거부" in message:
                 return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인(ROS_DOMAIN_ID=142) 설정을 확인하세요."
             return False, message
+
+    def _publish_string_topic(self, topic_name: str, text: str) -> tuple[bool, str]:
+        if not shutil.which("ros2"):
+            return False, "ros2 CLI를 찾을 수 없습니다."
+
+        payload = json.dumps({"data": text}, ensure_ascii=False)
+        cmd = [
+            "ros2", "topic", "pub", "--once",
+            "-w", "1", "--max-wait-time-secs", "1",
+            topic_name, "std_msgs/msg/String", payload,
+        ]
+
+        ros_env = self._build_ros_cli_env()
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=ros_env)
+            if result.returncode != 0:
+                err = result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패"
+                if "Timed out waiting for subscribers" in err:
+                    err = (
+                        "명령 구독자 없음: ROS 노드가 아직 안 떠 있거나 "
+                        "orchestrator_node/intent_parser_node 미실행, 또는 ROS_DOMAIN_ID/RMW 설정이 다릅니다."
+                    )
+                elif "Connection refused" in err or "연결이 거부" in err:
+                    err = "ROS 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인 설정을 확인하세요."
+                return False, err
+            return True, "ok"
+        except Exception as exc:
+            message = str(exc)
+            if "Connection refused" in message or "연결이 거부" in message:
+                return False, "ROS 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인 설정을 확인하세요."
+            return False, message
+
+    def publish_robot_speaker_volume(self, volume: int) -> tuple[bool, str]:
+        return self._publish_int_topic('/assistant/audio/set_volume', volume)
+
+    def publish_robot_voice_input_enabled(self, enabled: bool) -> tuple[bool, str]:
+        ok, message = self._publish_bool_topic('/assistant/audio/robot/input_enabled', enabled)
+        if not ok:
+            return ok, message
+        state_label = '활성' if enabled else '비활성'
+        return True, f'로봇 음성 입력을 {state_label}했습니다.'
+
+    def publish_person_greeting_enabled(self, enabled: bool) -> tuple[bool, str]:
+        ok, message = self._publish_bool_topic('/assistant/person_greeting/enabled', enabled)
+        if not ok:
+            return ok, message
+        state_label = '활성' if enabled else '비활성'
+        return True, f'사람 인사 로직을 {state_label}했습니다.'
+
+    def suspend_person_greeting(self, reason: str) -> tuple[bool, str]:
+        token = str(reason).strip() or 'runtime'
+        already_suspended = bool(self._person_greeting_suspend_reasons)
+        self._person_greeting_suspend_reasons.add(token)
+        if already_suspended:
+            return True, '사람 인식 인사 로직이 이미 작업 중 임시 중지 상태입니다.'
+        return self.publish_person_greeting_enabled(False)
+
+    def resume_person_greeting(self, reason: str) -> tuple[bool, str]:
+        token = str(reason).strip() or 'runtime'
+        self._person_greeting_suspend_reasons.discard(token)
+        if self._person_greeting_suspend_reasons:
+            return True, '다른 작업이 아직 실행 중이라 사람 인식 인사를 계속 중지합니다.'
+        return self.publish_person_greeting_enabled(bool(self._person_greeting_enabled))
+
+    def _publish_int_topic(self, topic_name: str, value: int) -> tuple[bool, str]:
+        if not shutil.which("ros2"):
+            return False, "ros2 CLI를 찾을 수 없습니다."
+
+        payload = json.dumps({"data": int(value)}, ensure_ascii=False)
+        cmd = [
+            "ros2", "topic", "pub", "--once",
+            "-w", "1", "--max-wait-time-secs", "1",
+            topic_name, "std_msgs/msg/Int32", payload,
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=self._build_ros_cli_env())
+            if result.returncode != 0:
+                err = result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패"
+                if "Timed out waiting for subscribers" in err:
+                    err = "로봇 오디오 구독자 없음: tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 설정 불일치"
+                elif "Connection refused" in err or "연결이 거부" in err:
+                    err = "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+                return False, err
+            return True, f"로봇 스피커 볼륨을 {int(value)}%로 적용했습니다."
+        except Exception as exc:
+            message = str(exc)
+            if "Connection refused" in message or "연결이 거부" in message:
+                return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+            return False, message
+
+    def _publish_bool_topic(self, topic_name: str, value: bool) -> tuple[bool, str]:
+        if not shutil.which("ros2"):
+            return False, "ros2 CLI를 찾을 수 없습니다."
+
+        payload = json.dumps({"data": bool(value)}, ensure_ascii=False)
+        cmd = [
+            "ros2", "topic", "pub", "--once",
+            "-w", "1", "--max-wait-time-secs", "1",
+            topic_name, "std_msgs/msg/Bool", payload,
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=self._build_ros_cli_env())
+            if result.returncode != 0:
+                err = result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패"
+                if "Timed out waiting for subscribers" in err:
+                    err = "로봇 오디오 제어 구독자 없음: 로봇 오디오 노드 미실행 또는 ROS 설정 불일치"
+                elif "Connection refused" in err or "연결이 거부" in err:
+                    err = "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+                return False, err
+            return True, "ok"
+        except Exception as exc:
+            message = str(exc)
+            if "Connection refused" in message or "연결이 거부" in message:
+                return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+            return False, message
+
+    def _sync_remote_audio_preferences(self) -> None:
+        try:
+            if not self._query_remote_bool_topic('/assistant/audio/robot/input_available'):
+                self.apply_robot_voice_input_enabled(False, publish=False)
+            self.publish_robot_voice_input_enabled(bool(self._robot_voice_input_enabled))
+            self.publish_person_greeting_enabled(bool(self._person_greeting_enabled))
+        except Exception:
+            pass
+
+    def _query_remote_bool_topic(self, topic_name: str) -> bool:
+        if not shutil.which("ros2"):
+            return False
+
+        cmd = [
+            "ros2", "topic", "echo", "--once",
+            topic_name, "std_msgs/msg/Bool",
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=4,
+                env=self._build_ros_cli_env(),
+            )
+            if result.returncode != 0:
+                return False
+            output = (result.stdout or "").lower()
+            return "data: true" in output
+        except Exception:
+            return False
+
+    @staticmethod
+    def _build_ros_cli_env() -> dict[str, str]:
+        ros_env = os.environ.copy()
+        ros_env.setdefault("ROS_DOMAIN_ID", "142")
+        ros_env.setdefault("ROS_LOCALHOST_ONLY", "0")
+        ros_env.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+        ros_env.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "SUBNET")
+        robot_peer_ip = (
+            ros_env.get("ASSISTANT_ROBOT_IP", "").strip()
+            or ros_env.get("ASSISTANT_TURTLEBOT_IP", "").strip()
+            or "192.168.96.23"
+        )
+        if robot_peer_ip:
+            ros_env["ROS_STATIC_PEERS"] = robot_peer_ip
+        return ros_env
 
     def switch_page(self, index, *, manual: bool = False):
         """페이지 전환 및 헤더 표시 여부 결정"""
@@ -583,29 +1033,7 @@ class OmniMateMain(QMainWindow):
         self._sync_face_voice_loop()
 
     def _sync_face_voice_loop(self) -> None:
-        # 음성 인식은 페이지와 무관하게 항상 유지 기능.
-        should_run = self._face_voice_loop_enabled
-        if should_run and not self._face_voice_loop_active:
-            self._face_voice_loop_active = True
-            self._face_voice_stage = "wakeword"
-            self._face_voice_command_started_at = 0.0
-            self._face_voice_silence_retries = 0
-            self._start_face_voice_worker(delay_ms=200)
-            return
-
-        if not should_run and self._face_voice_loop_active:
-            self._face_voice_loop_active = False
-            self._face_voice_stage = "wakeword"
-            self._face_voice_command_started_at = 0.0
-            self._face_voice_silence_retries = 0
-            if hasattr(self, "shared_face_controller"):
-                try:
-                    self.shared_face_controller.on_listening_finished()
-                    self.shared_face_controller.on_tts_finished()
-                except Exception:
-                    pass
-            # 실행 중 워커를 즉시 delete하면 QThread destroyed 크래시가 날 수 있어,
-            # finished 시점까지 참조를 유지하고 신규 워커만 생성하지 않도록 둔다.
+        self._global_wakeword_controller.sync()
 
     def _start_face_voice_worker(self, *, delay_ms: int = 0) -> None:
         if not self._face_voice_loop_active:
@@ -723,18 +1151,7 @@ class OmniMateMain(QMainWindow):
 
     @staticmethod
     def _extract_command_after_wakeword(text: str) -> str:
-        candidates = (
-            "옴니야", "오미야", "옴니여", "오미여",
-            "은미야", "은미여", "은미",
-            "옴니", "오미",
-        )
-        stripped = text.strip()
-        for keyword in candidates:
-            idx = stripped.find(keyword)
-            if idx >= 0:
-                tail = stripped[idx + len(keyword):].strip(" \t,.;:!?~")
-                return tail
-        return ""
+        return extract_command_after_wakeword(text)
 
     def _on_face_voice_failed(self, message: str) -> None:
         if self._face_voice_stage != "command":
@@ -819,21 +1236,7 @@ class OmniMateMain(QMainWindow):
 
     @staticmethod
     def _is_wakeword_detected(text: str) -> bool:
-        compact = re.sub(r"[^0-9A-Za-z가-힣]", "", text).lower()
-        wakeword_variants = {
-            "옴니야",
-            "오미야",
-            "옴니여",
-            "오미여",
-            "은미야",
-            "은미여",
-            "은미",
-            "옴니",
-            "오미",
-        }
-        if compact in wakeword_variants:
-            return True
-        return any(variant in compact for variant in wakeword_variants)
+        return is_wakeword_detected(text)
 
     def _resolve_quick_tts_backend(self) -> str:
         selected = str(getattr(self, "_default_voice_backend", "auto"))
@@ -965,6 +1368,10 @@ class OmniMateMain(QMainWindow):
             'PROCESSING':     ('🤔 이해 중...', '#F59E0B'),
             'RESPONDING':     ('💬 응답 중...', '#8B5CF6'),
             'ACTING':         ('🤖 동작 중...', '#EF4444'),
+            'EXECUTING':      ('🤖 동작 중...', '#EF4444'),
+            'WAITING_CONFIRMATION': ('🖐️ 확인 대기 중...', '#F59E0B'),
+            'CHARGING':       ('⚡ 충전 중...', '#06B6D4'),
+            'LOW_BATTERY_RESTRICTED': ('🔋 저전력 제한', '#F59E0B'),
             'ERROR':          ('⚠️ 오류 발생', '#EF4444'),
             'EMERGENCY_STOP': ('🛑 비상 정지', '#EF4444'),
         }
@@ -983,8 +1390,25 @@ class OmniMateMain(QMainWindow):
 
     def _on_ros_status_changed(self, status: str) -> None:
         """status_text 로그 수신 (필요 시 팁소 또는 상태 표시에 사용할 수 있다)."""
-        # TODO(integration): 상태 텍스트에서 TTS 시작/종료, wakeword, error 이벤트를 파싱해
-        # shared_face_controller.on_tts_started/on_tts_finished/on_wakeword_detected 연결 기능.
+        if hasattr(self, 'shared_face_controller'):
+            status_upper = status.strip().upper()
+            try:
+                if status_upper.startswith('STATE:LISTENING'):
+                    self.shared_face_controller.on_processing_finished()
+                    self.shared_face_controller.on_tts_finished()
+                    self.shared_face_controller.on_listening_started()
+                elif status_upper.startswith('STATE:PROCESSING'):
+                    self.shared_face_controller.on_listening_finished()
+                    self.shared_face_controller.on_processing_started()
+                elif status_upper.startswith('STATE:RESPONDING'):
+                    self.shared_face_controller.on_processing_finished()
+                    self.shared_face_controller.on_tts_started()
+                elif status_upper.startswith('STATE:IDLE'):
+                    self.shared_face_controller.on_processing_finished()
+                    self.shared_face_controller.on_listening_finished()
+                    self.shared_face_controller.on_tts_finished()
+            except Exception:
+                pass
         if hasattr(self, 'home_page'):
             self.home_page.update_robot_pose_from_status(status)
 
@@ -1018,7 +1442,13 @@ class OmniMateMain(QMainWindow):
 
             # Require at least one real capture device line.
             # Ignore virtual-only endpoints that often appear when no physical mic is connected.
-            capture_lines = [line.strip().lower() for line in result.stdout.splitlines() if "card " in line and "device " in line]
+            capture_lines = []
+            for raw_line in result.stdout.splitlines():
+                line = raw_line.strip().lower()
+                has_card = "card " in line or "카드" in line
+                has_device = "device " in line or "장치" in line
+                if has_card and has_device:
+                    capture_lines.append(line)
             if not capture_lines:
                 return False
 
@@ -1036,15 +1466,11 @@ class OmniMateMain(QMainWindow):
         except Exception:
             pass
 
-        # 종료 시 음성 루프 워커가 남아있으면 안전하게 종료를 기다린다.
-        self._face_voice_loop_active = False
-        if self._face_voice_worker is not None:
+        if hasattr(self, '_global_wakeword_controller'):
             try:
-                if self._face_voice_worker.isRunning():
-                    self._face_voice_worker.wait(11000)
+                self._global_wakeword_controller.stop()
             except Exception:
                 pass
-            self._face_voice_worker = None
 
         if hasattr(self, 'shared_face_controller'):
             try:

@@ -1,0 +1,96 @@
+medication_targets:
+  - 희정님
+
+named_places:
+  home:
+    source: config_places
+    frame_id: map
+    x: 0.046
+    y: 0.059
+    orientation_z: 0.519
+    orientation_w: 0.854
+    aliases:
+      - home
+      - 집
+      - 대기위치
+  khj:
+    source: config_places
+    frame_id: map
+    x: -1.417
+    y: 1.649
+    orientation_z: -0.880
+    orientation_w: 0.474
+    aliases:
+      - khj
+  kkh:
+    source: config_places
+    frame_id: map
+    x: 0.455
+    y: 2.242
+    orientation_z: 0.965
+    orientation_w: 0.261
+    aliases:
+      - kkh
+  영업팀:
+    source: waypoints
+    frame_id: map
+    x: 0.022
+    y: 0.019
+    yaw: 1.097
+    aliases:
+      - 영업팀
+    ocr_enabled: true
+  개발팀:
+    source: waypoints
+    frame_id: map
+    x: -5.779
+    y: 7.246
+    yaw: -0.505
+    aliases:
+      - 개발팀
+    ocr_enabled: true
+  기획팀:
+    source: waypoints
+    frame_id: map
+    x: 0.861
+    y: 1.554
+    yaw: -2.122
+    aliases:
+      - 기획팀
+    ocr_enabled: true
+  인사팀:
+    source: waypoints
+    frame_id: map
+    x: -7.175
+    y: 4.988
+    yaw: 2.629
+    aliases:
+      - 인사팀
+    ocr_enabled: true
+  마케팅팀:
+    source: waypoints
+    frame_id: map
+    x: -1.116
+    y: 5.867
+    yaw: 1.211
+    aliases:
+      - 마케팅팀
+    ocr_enabled: true
+  회계팀:
+    source: waypoints
+    frame_id: map
+    x: 2.523
+    y: 3.212
+    yaw: 2.584
+    aliases:
+      - 회계팀
+    ocr_enabled: true
+  희정님:
+    source: waypoints
+    frame_id: map
+    x: 0.585
+    y: 1.403
+    yaw: -1.995
+    aliases:
+      - 희정님
+    ocr_enabled: true

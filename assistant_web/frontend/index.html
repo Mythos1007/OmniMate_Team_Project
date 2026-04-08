@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OmniMate Web Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header id="topbar" class="topbar">
+      <div class="topbar-left">
+        <button id="hdrHomeBtn" class="header-btn">Home</button>
+        <button id="hdrSleepBtn" class="header-btn header-btn-muted">취침모드</button>
+      </div>
+      <div id="voiceState" class="voice-state">호출어 대기 중...</div>
+      <div class="topbar-right">
+        <span id="networkText" class="header-status">네트워크 확인 중...</span>
+        <span id="micText" class="header-status">마이크 확인 중...</span>
+        <span id="batteryText" class="header-status">배터리 --</span>
+          <button id="hdrVoiceCmdBtn" class="header-btn">음성명령 실행</button>
+      </div>
+    </header>
+
+    <main class="view-stack">
+      <section id="page-face" class="page page-face active">
+        <button id="faceWakeBtn" class="face-screen" aria-label="face screen">
+          <div class="face-stage">
+            <img id="faceImg" src="/gui-assets/faces/neutral_base.svg" alt="robot face" />
+          </div>
+          <div class="face-meta">
+            <strong id="faceName">neutral_base</strong>
+            <span id="faceHint">화면을 터치하거나 이름을 불러주세요</span>
+          </div>
+        </button>
+      </section>
+
+      <section id="page-home" class="page">
+        <div class="home-grid">
+          <article class="card map-card">
+            <div class="card-head">
+              <div>
+                <h2>지도 영역</h2>
+                <p>현재 위치와 경로, 클릭 이동을 웹에서 그대로 확인합니다.</p>
+              </div>
+              <div class="map-meta">
+                <span class="meta-pill">맵 소스</span>
+                <strong id="mapSource">로딩 중...</strong>
+              </div>
+            </div>
+                  <span class="meta-pill">좌표계</span>
+            <div id="routeSummary" class="route-summary">지도 클릭 시 해당 좌표로 이동 명령을 전송합니다.</div>
+            <div id="quickDestinations" class="quick-actions"></div>
+          </article>
+
+          <aside class="home-side">
+            <button id="weatherCard" class="card weather-card" type="button">
+              <div class="weather-col weather-col-icon">
+                <div id="weatherIcon" class="weather-icon">--</div>
+                <div id="weatherDesc" class="weather-desc">확인중</div>
+              </div>
+              <div id="weatherTemp" class="weather-temp">--°</div>
+              <div class="weather-col weather-col-air">
+                <div id="airFace" class="air-face">🙂</div>
+                <div id="airText" class="air-text">미세먼지<br>보통</div>
+              </div>
+            </button>
+
+            <article class="card status-card">
+              <h2>현재 상태</h2>
+              <strong id="statusMain" class="status-main">대기 중...</strong>
+              <p id="statusSub" class="status-sub">명령을 기다리고 있습니다.</p>
+              <p id="statusEta" class="status-eta"></p>
+              <p id="poseStatus" class="status-pose">지도 좌표 수신 대기 중</p>
+            </article>
+          </aside>
+        </div>
+      </section>
+
+      <section id="page-schedule" class="page data-page">
+        <div class="page-header">
+          <div>
+            <h2>일정</h2>
+            <p>main.py의 달력 구조와 선택 날짜 상세 목록 흐름을 웹에 맞게 재현했습니다.</p>
+          </div>
+          <button class="primary-btn" data-go="home">닫기</button>
+        </div>
+        <div class="two-pane">
+          <article class="card calendar-card">
+            <div class="calendar-toolbar">
+              <button id="calendarPrevBtn" class="ghost-btn">이전</button>
+              <strong id="calendarTitle"></strong>
+              <button id="calendarNextBtn" class="ghost-btn">다음</button>
+            </div>
+            <div id="calendarGrid" class="calendar-grid"></div>
+          </article>
+          <article class="card detail-card">
+            <div class="detail-card-head">
+              <h3 id="scheduleDateTitle">선택 날짜 일정</h3>
+              <button id="scheduleAddBtn" class="primary-btn">새 일정 추가</button>
+            </div>
+            <div id="scheduleList" class="list-panel"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-alarm" class="page data-page">
+        <div class="page-header">
+          <div>
+            <h2>알람</h2>
+            <p>카드형 알람 목록, 요일 표시, 활성 토글을 데스크톱 GUI 흐름과 맞춥니다.</p>
+          </div>
+          <div class="page-header-actions">
+            <button id="alarmAddBtn" class="primary-btn">새 알람 추가</button>
+            <button class="ghost-btn" data-go="home">닫기</button>
+          </div>
+        </div>
+        <article class="card tall-card">
+          <div id="alarmList" class="alarm-list"></div>
+        </article>
+      </section>
+
+      <section id="page-medication" class="page data-page">
+        <div class="page-header">
+          <div>
+            <h2>복약 확인</h2>
+            <p>기존 복약 카드와 완료 토글 중심 구조를 그대로 가져옵니다.</p>
+          </div>
+          <div class="page-header-actions">
+            <button id="medAddBtn" class="primary-btn">신규 복약 등록</button>
+            <button class="ghost-btn" data-go="home">닫기</button>
+          </div>
+        </div>
+        <div id="medStatusBar" class="status-banner pending">복약 상태 확인 중...</div>
+        <article class="card tall-card">
+          <div id="medList" class="med-list"></div>
+        </article>
+      </section>
+
+      <section id="page-weather" class="page data-page">
+        <div class="page-header">
+          <div>
+            <h2>상세 날씨</h2>
+            <p>홈 카드에서 확장되는 상세 날씨 영역입니다.</p>
+          </div>
+          <button class="primary-btn" data-go="home">닫기</button>
+        </div>
+        <div class="weather-detail-grid">
+          <article class="card weather-detail-main">
+            <div class="weather-detail-top">
+              <div>
+                <div id="weatherDetailIcon" class="weather-detail-icon">☁️</div>
+                <div id="weatherDetailDesc" class="weather-detail-desc">날씨 정보 대기 중</div>
+              </div>
+              <div id="weatherDetailTemp" class="weather-detail-temp">--°</div>
+            </div>
+          </article>
+          <article class="card weather-detail-side">
+            <h3>실시간 상태</h3>
+            <div class="kv-row"><span>네트워크</span><strong id="weatherRos">-</strong></div>
+            <div class="kv-row"><span>상태</span><strong id="weatherState">-</strong></div>
+            <div class="kv-row"><span>마지막 메시지</span><strong id="weatherStatus">-</strong></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-mail" class="page data-page">
+        <div class="page-header">
+          <div>
+            <h2>우편 전달</h2>
+            <p>기존 OCR 페이지의 카메라 중심 구조를 웹에서 먼저 재현합니다.</p>
+          </div>
+          <button class="ghost-btn" data-go="home">닫기</button>
+        </div>
+        <div class="mail-layout">
+          <article class="card camera-card">
+            <video id="mailVideo" autoplay playsinline muted></video>
+          </article>
+          <div id="mailResult" class="mail-result">수취인을 스캔해 주세요.</div>
+          <div class="inline-actions">
+            <button id="mailStartBtn" class="primary-btn">카메라 시작</button>
+            <button id="mailConfirmBtn" class="primary-btn subtle-btn">확인</button>
+            <button id="mailCancelBtn" class="ghost-btn">취소</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-voice" class="page data-page">
+        <div class="page-header">
+          <div>
+            <h2>음성 테스트</h2>
+            <p>브라우저 마이크 권한, Web Speech API, 수동 명령 전송을 함께 테스트합니다.</p>
+          </div>
+          <button class="ghost-btn" data-go="home">닫기</button>
+        </div>
+        <div class="voice-layout">
+          <article class="card control-card">
+            <label for="commandText">명령 텍스트</label>
+            <input id="commandText" type="text" placeholder="예: 안내 시작해줘" />
+            <div class="inline-actions">
+              <button id="sendBtn" class="primary-btn">명령 전송</button>
+              <button id="wakeBtn" class="ghost-btn">수동 웨이크</button>
+            </div>
+            <div class="inline-actions">
+              <button id="permBtn" class="subtle-btn">권한 요청</button>
+              <button id="micBtn" class="subtle-btn">마이크 시작</button>
+              <button id="speakBtn" class="ghost-btn">마지막 상태 읽기</button>
+            </div>
+            <div class="inline-actions">
+              <button id="stopBtn" class="ghost-btn">정지</button>
+              <button id="homeBtn" class="ghost-btn">복귀</button>
+              <button id="followBtn" class="ghost-btn">따라와</button>
+            </div>
+            <div class="kv-row"><span>권한 상태</span><strong id="permState">확인 전</strong></div>
+            <div id="voiceLog" class="console-log">ready</div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-settings" class="page data-page">
+        <div class="page-header">
+          <div>
+            <h2>설정</h2>
+            <p>Qt 설정 페이지의 일반 설정, 테마, 얼굴 미리보기 구조를 웹용으로 정리했습니다.</p>
+          </div>
+          <button class="ghost-btn" data-go="home">닫기</button>
+        </div>
+        <div class="settings-grid">
+          <article class="card settings-card">
+            <h3>일반</h3>
+            <label class="field-label" for="themeSelect">테마</label>
+            <select id="themeSelect">
+              <option value="light">라이트</option>
+              <option value="dark">다크</option>
+            </select>
+            <label class="field-label" for="pollIntervalSelect">상태 갱신 주기</label>
+            <select id="pollIntervalSelect">
+              <option value="1000">1000 ms</option>
+              <option value="2000">2000 ms</option>
+              <option value="3000" selected>3000 ms</option>
+              <option value="5000">5000 ms</option>
+            </select>
+          </article>
+          <article class="card settings-card">
+            <h3>얼굴 프리뷰</h3>
+            <div class="face-preview-card">
+              <img id="facePreviewImg" src="/gui-assets/faces/neutral_base.svg" alt="face preview" />
+            </div>
+            <select id="faceSelect"></select>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop hidden">
+    <section class="modal-sheet">
+      <div class="modal-head">
+        <h3 id="modalTitle">항목 편집</h3>
+        <button id="modalCloseBtn" class="ghost-btn">닫기</button>
+      </div>
+      <form id="modalForm" class="modal-form"></form>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

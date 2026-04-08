@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -126,12 +126,19 @@ class VoiceTestPage(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
+        self._worker = None
+        self._wakeword_test_stage = "wakeword"
         layout = QVBoxLayout(self)
         layout.setContentsMargins(40, 20, 40, 20)
 
         title = QLabel("🎤 음성 인식 테스트 창")
         title.setProperty("class", "TitleText")
         layout.addWidget(title)
+
+        info_lbl = QLabel("전 화면 공통 호출어 인식은 백그라운드에서 상시 동작합니다. 이 페이지 버튼은 수동 단발 테스트용입니다.")
+        info_lbl.setWordWrap(True)
+        info_lbl.setProperty("class", "SubText")
+        layout.addWidget(info_lbl)
 
         status_row = QHBoxLayout()
         self.network_state_lbl = QLabel("📶 네트워크 확인 중...")
@@ -151,6 +158,11 @@ class VoiceTestPage(QWidget):
 
         simulation_row = QHBoxLayout()
         simulation_row.setSpacing(8)
+        self.wakeword_mode_check = QCheckBox("호출어 대화 테스트")
+        self.wakeword_mode_check.setChecked(True)
+        self.wakeword_mode_check.toggled.connect(self._on_wakeword_mode_toggled)
+        self.wakeword_stage_lbl = QLabel("현재 단계: 호출어 대기")
+        self.wakeword_stage_lbl.setProperty("class", "SubText")
         simulation_label = QLabel("인식된 음성으로 명령 시뮬레이션 출력")
         simulation_label.setProperty("class", "SubText")
         self.simulation_toggle_btn = QPushButton("ON")
@@ -162,13 +174,15 @@ class VoiceTestPage(QWidget):
             "QPushButton:checked { background-color: #10B981; color: #FFFFFF; }"
         )
         self.simulation_toggle_btn.toggled.connect(self._on_simulation_toggled)
+        simulation_row.addWidget(self.wakeword_mode_check)
+        simulation_row.addWidget(self.wakeword_stage_lbl)
         simulation_row.addWidget(self.simulation_toggle_btn)
         simulation_row.addWidget(simulation_label)
         simulation_row.addStretch()
         layout.addLayout(simulation_row)
 
         btn_layout = QHBoxLayout()
-        self.live_test_btn = QPushButton("🎤 마이크로 인식 테스트")
+        self.live_test_btn = QPushButton("🎤 수동 재시작")
         self.live_test_btn.setProperty("class", "PrimaryBtn")
         self.live_test_btn.clicked.connect(self._run_live_recognition)
 
@@ -184,8 +198,8 @@ class VoiceTestPage(QWidget):
         btn_layout.addWidget(tts_test_btn)
         layout.addLayout(btn_layout)
 
-        self._worker = None
         self._sync_capability_labels()
+        self._update_wakeword_stage_ui()
 
     def _apply_log_area_style(self) -> None:
         theme = getattr(self.main_window, "_theme_mode", "light") if self.main_window is not None else "light"
@@ -210,20 +224,62 @@ class VoiceTestPage(QWidget):
             self.log_area.append("시스템: 네트워크가 없어 온라인 STT를 실행할 수 없습니다.")
             return
 
-        self.live_test_btn.setEnabled(False)
-        self.log_area.append("시스템: 마이크 인식 테스트를 시작합니다.")
-        self._worker = SpeechRecognitionWorker(language="ko-KR", parent=self)
+        if self._worker is not None:
+            return
+
+        record_seconds = 10 if self._use_wakeword_mode() and self._wakeword_test_stage == "wakeword" else 6
+        if self._use_wakeword_mode():
+            label = "호출어" if self._wakeword_test_stage == "wakeword" else "명령"
+            self.log_area.append(f"시스템: {label} 인식을 시작합니다.")
+        else:
+            self.log_area.append("시스템: 마이크 인식 테스트를 시작합니다.")
+
+        self._worker = SpeechRecognitionWorker(language="ko-KR", record_seconds=record_seconds, parent=self)
         self._worker.status_changed.connect(lambda msg: self.log_area.append(f"시스템: {msg}"))
         self._worker.recognized.connect(self._on_recognized)
         self._worker.failed.connect(self._on_failed)
-        self._worker.finished.connect(lambda: self.live_test_btn.setEnabled(True))
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     def _on_recognized(self, text: str) -> None:
         self.log_area.append(f"User: {text}")
         self.log_area.append("시스템: 음성 인식이 완료되었습니다.")
+        if self._use_wakeword_mode() and self.main_window is not None:
+            self._handle_wakeword_test_recognized(text)
+            return
         if self.simulation_toggle_btn.isChecked():
             self.log_area.append(f"시스템: {self._build_simulation_response(text)}")
+
+    def _handle_wakeword_test_recognized(self, text: str) -> None:
+        if self._wakeword_test_stage == "wakeword":
+            if not self.main_window._is_wakeword_detected(text):
+                self.log_area.append("시스템: 호출어가 아닙니다. 다시 불러주세요.")
+                self._wakeword_test_stage = "wakeword"
+                self._update_wakeword_stage_ui()
+                return
+
+            inline_command = self.main_window._extract_command_after_wakeword(text)
+            if inline_command:
+                self.log_area.append("시스템: 호출어 뒤의 명령은 무시하고, 다음 턴에서 명령만 듣습니다.")
+
+            wakeword_prompt = self.main_window.render_tts_scenario("wakeword_prompt")
+            self.log_area.append(f"시스템: {wakeword_prompt}")
+            ok, message = self.main_window.speak_text(wakeword_prompt, target="pc")
+            if not ok:
+                self.log_area.append(f"시스템: 호출어 응답 TTS 실패 - {message}")
+
+            self._wakeword_test_stage = "command"
+            self._update_wakeword_stage_ui()
+            QTimer.singleShot(self._estimate_tts_delay_ms(wakeword_prompt if ok else ""), self._begin_command_followup)
+            return
+
+        response = self._build_simulation_response(text)
+        self.log_area.append(f"시스템: {response}")
+        ok, message = self.main_window.speak_text(response, target="pc")
+        if not ok:
+            self.log_area.append(f"시스템: 명령 응답 TTS 실패 - {message}")
+        self._wakeword_test_stage = "wakeword"
+        self._update_wakeword_stage_ui()
 
     def _on_simulation_toggled(self, checked: bool) -> None:
         self.simulation_toggle_btn.setText("ON" if checked else "OFF")
@@ -231,6 +287,14 @@ class VoiceTestPage(QWidget):
             self.log_area.append("시스템: 명령 시뮬레이션 출력이 활성화되었습니다.")
         else:
             self.log_area.append("시스템: 명령 시뮬레이션 출력이 비활성화되었습니다.")
+
+    def _on_wakeword_mode_toggled(self, checked: bool) -> None:
+        self._wakeword_test_stage = "wakeword"
+        self._update_wakeword_stage_ui()
+        if checked:
+            self.log_area.append("시스템: 호출어 대화 테스트 모드가 활성화되었습니다.")
+        else:
+            self.log_area.append("시스템: 일반 음성 인식 테스트 모드로 전환되었습니다.")
 
     def _build_simulation_response(self, text: str) -> str:
         if self.main_window is not None and hasattr(self.main_window, "build_situation_response_text"):
@@ -261,6 +325,44 @@ class VoiceTestPage(QWidget):
 
     def _on_failed(self, message: str) -> None:
         self.log_area.append(f"시스템: {message}")
+        if self._use_wakeword_mode() and self._wakeword_test_stage == "command":
+            self.log_area.append("시스템: 명령 대기 상태를 유지합니다. 수동 테스트를 다시 실행할 수 있습니다.")
+            return
+
+    def _on_worker_finished(self) -> None:
+        self._worker = None
+
+    def _begin_command_followup(self) -> None:
+        if not self._use_wakeword_mode():
+            return
+        if self._wakeword_test_stage != "command":
+            return
+        if self._worker is not None:
+            return
+        self.log_area.append("시스템: 이제 명령을 말씀해주세요.")
+        self._run_live_recognition()
+
+    def _update_wakeword_stage_ui(self) -> None:
+        if not self._use_wakeword_mode():
+            self.wakeword_stage_lbl.setText("현재 단계: 일반 인식 상시 대기")
+            self.live_test_btn.setText("🎤 수동 재시작")
+            return
+
+        if self._wakeword_test_stage == "wakeword":
+            self.wakeword_stage_lbl.setText("현재 단계: 호출어 상시 대기")
+            self.live_test_btn.setText("🎤 수동 재시작")
+        else:
+            self.wakeword_stage_lbl.setText("현재 단계: 명령 상시 대기")
+            self.live_test_btn.setText("🎤 수동 재시작")
+
+    def _use_wakeword_mode(self) -> bool:
+        return bool(self.wakeword_mode_check.isChecked())
+
+    @staticmethod
+    def _estimate_tts_delay_ms(text: str) -> int:
+        if not text:
+            return 300
+        return max(1200, min(5500, 650 + (len(text) * 85)))
 
 
 class TtsTestPage(QWidget):
@@ -719,7 +821,11 @@ class TtsTestPage(QWidget):
         ros_env.setdefault("ROS_LOCALHOST_ONLY", "0")
         ros_env.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
         ros_env.setdefault("ROS_AUTOMATIC_DISCOVERY_RANGE", "SUBNET")
-        robot_peer_ip = ros_env.get("ASSISTANT_ROBOT_IP", "").strip()
+        robot_peer_ip = (
+            ros_env.get("ASSISTANT_ROBOT_IP", "").strip()
+            or ros_env.get("ASSISTANT_TURTLEBOT_IP", "").strip()
+            or "192.168.96.23"
+        )
         if robot_peer_ip:
             ros_env["ROS_STATIC_PEERS"] = robot_peer_ip
 

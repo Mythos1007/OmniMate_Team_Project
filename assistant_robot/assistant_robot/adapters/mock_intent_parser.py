@@ -16,6 +16,10 @@ class MockIntentParser(BaseIntentParser):
     """
 
     def parse(self, raw_text: str) -> IntentParseResult:
+        scheduler_command = self._parse_scheduler_command(raw_text)
+        if scheduler_command is not None:
+            return IntentParseResult(primary_command=scheduler_command)
+
         wakeword_detected = bool(re.search(r"옴니(\s*야)?", raw_text))
         cleaned = re.sub(r"옴니\s*야?", "", raw_text).strip()
         commands = self._extract_commands(cleaned)
@@ -39,11 +43,72 @@ class MockIntentParser(BaseIntentParser):
             rejection_message_key="rejection.multi_command" if rejected else None,
         )
 
+    def _parse_scheduler_command(self, raw_text: str) -> CommandRequest | None:
+        text = str(raw_text or "").strip()
+        if not text.startswith("[SCHED]|"):
+            return None
+
+        parts = [part.strip() for part in text.split("|", 4)]
+        if len(parts) < 4:
+            return None
+        _, mission_name, label, target_location, *rest = parts
+        announcement_text = rest[0].strip() if rest else ""
+        try:
+            mission_type = MissionType(mission_name)
+        except ValueError:
+            return None
+
+        requires_confirmation = mission_type in {
+            MissionType.DELIVERY,
+            MissionType.ALARM,
+            MissionType.MEDICATION,
+        }
+        requires_movement = mission_type in {
+            MissionType.DELIVERY,
+            MissionType.CALL,
+            MissionType.ALARM,
+            MissionType.MEDICATION,
+            MissionType.RETURN_TO_BASE,
+        }
+        target_user = label or None
+        if mission_type == MissionType.RETURN_TO_BASE:
+            target_user = None
+
+        payload = {
+            "scheduler_label": label,
+            "announcement_text": announcement_text,
+        }
+        return CommandRequest(
+            source=CommandSource.SCHEDULER,
+            raw_text=text,
+            parsed_intent={
+                "intent_name": mission_type.value,
+                "requires_confirmation": requires_confirmation,
+            },
+            requires_movement=requires_movement,
+            target_user=target_user,
+            target_location=target_location or None,
+            payload=payload,
+        )
+
     def _extract_commands(self, text: str) -> list[CommandRequest]:
         commands: list[CommandRequest] = []
         # 기능: 연결어(그리고, 쉼표) 기준으로 문장을 분리해 발화 순서를 최대한 보존 기능.
         segments = [segment.strip() for segment in re.split(r"그리고|,", text) if segment.strip()]
         for segment in segments:
+            schedule_add_match = re.search(r"(일정|스케줄|약속).*(추가|등록)", segment)
+            if schedule_add_match:
+                commands.append(
+                    CommandRequest(
+                        source=CommandSource.VOICE,
+                        raw_text=segment,
+                        parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
+                        requires_movement=False,
+                        payload={"action": "schedule_add", "source_text": segment},
+                    )
+                )
+                continue
+
             schedule_match = re.search(r"(오늘\s*)?일정\s*(알려\s*줘|보여\s*줘|확인\s*해\s*줘)?", segment)
             if schedule_match:
                 commands.append(
@@ -52,7 +117,7 @@ class MockIntentParser(BaseIntentParser):
                         raw_text=segment,
                         parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
                         requires_movement=False,
-                        payload={"action": "schedule_info"},
+                        payload={"action": "schedule_info", "source_text": segment},
                     )
                 )
                 continue
@@ -65,7 +130,7 @@ class MockIntentParser(BaseIntentParser):
                         raw_text=segment,
                         parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
                         requires_movement=False,
-                        payload={"action": "alarm_set"},
+                        payload={"action": "alarm_add", "source_text": segment},
                     )
                 )
                 continue
@@ -78,7 +143,20 @@ class MockIntentParser(BaseIntentParser):
                         raw_text=segment,
                         parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
                         requires_movement=False,
-                        payload={"action": "alarm_info"},
+                        payload={"action": "alarm_info", "source_text": segment},
+                    )
+                )
+                continue
+
+            medication_add_match = re.search(r"(복약|약).*(추가|등록)", segment)
+            if medication_add_match:
+                commands.append(
+                    CommandRequest(
+                        source=CommandSource.VOICE,
+                        raw_text=segment,
+                        parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
+                        requires_movement=False,
+                        payload={"action": "medication_add", "source_text": segment},
                     )
                 )
                 continue
@@ -91,7 +169,7 @@ class MockIntentParser(BaseIntentParser):
                         raw_text=segment,
                         parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
                         requires_movement=False,
-                        payload={"action": "medication_info"},
+                        payload={"action": "medication_info", "source_text": segment},
                     )
                 )
                 continue
@@ -104,7 +182,7 @@ class MockIntentParser(BaseIntentParser):
                         raw_text=segment,
                         parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
                         requires_movement=False,
-                        payload={"action": "cancel_request"},
+                        payload={"action": "cancel_request", "source_text": segment},
                     )
                 )
                 continue
@@ -117,6 +195,7 @@ class MockIntentParser(BaseIntentParser):
                         raw_text=segment,
                         parsed_intent={"intent_name": MissionType.STATUS_BRIEF.value},
                         requires_movement=False,
+                        payload={"source_text": segment},
                     )
                 )
                 continue

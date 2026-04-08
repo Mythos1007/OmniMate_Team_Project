@@ -1,0 +1,9 @@
+scheduled_missions:
+  - name: 아침
+    time: "14:22"
+    text: 아침 약 드세요
+    target_place: khj
+  - name: 점심
+    time: "14:22"
+    text: 아침 약 드세요
+    target_place: kkh

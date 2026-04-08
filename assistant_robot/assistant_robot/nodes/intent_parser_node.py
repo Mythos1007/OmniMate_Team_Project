@@ -8,6 +8,7 @@ import rclpy
 from rclpy.node import Node
 
 from assistant_robot.adapters.mock_intent_parser import MockIntentParser
+from assistant_robot.constants import ASSISTANT_COMMAND_TOPIC
 
 
 class IntentParserNode(Node):
@@ -15,7 +16,7 @@ class IntentParserNode(Node):
         super().__init__("intent_parser_node")
         self._parser = MockIntentParser()
         self._publisher = self.create_publisher(String, "/assistant/parsed_intent", 10)
-        self.create_subscription(String, "/assistant/voice_text", self._on_voice_text, 10)
+        self.create_subscription(String, ASSISTANT_COMMAND_TOPIC, self._on_voice_text, 10)
         self.get_logger().info("Intent parser node ready.")
 
     def _on_voice_text(self, message: String) -> None:

@@ -8,8 +8,9 @@ from assistant_audio.providers.tts_provider import (
     SpeechDispatcherTTSProvider,
     TTSProvider,
 )
+from assistant_audio.system_volume_controller import SystemVolumeController
 
-from std_msgs.msg import String
+from std_msgs.msg import Int32, String
 
 import rclpy
 from rclpy.node import Node
@@ -40,10 +41,19 @@ class TTSNode(Node):
         self.declare_parameter('cartesia_output_container', 'wav')
         self.declare_parameter('cartesia_output_encoding', 'pcm_f32le')
         self.declare_parameter('cartesia_sample_rate', 44100)
+        self.declare_parameter('speaker_volume_backend', 'auto')
+        self.declare_parameter('speaker_volume_device', 'Master')
+        self.declare_parameter('speaker_volume_percent', 70)
 
         self._provider = self._create_provider()
         self._status_publisher = self.create_publisher(String, '/assistant/status_text', 10)
+        self._volume_controller = SystemVolumeController(
+            backend=str(self.get_parameter('speaker_volume_backend').value),
+            device_name=str(self.get_parameter('speaker_volume_device').value),
+        )
         self.create_subscription(String, '/assistant/speak', self._on_speak_request, 10)
+        self.create_subscription(Int32, '/assistant/audio/set_volume', self._on_set_volume_request, 10)
+        self._apply_initial_volume()
 
         backend = self.get_parameter('tts_backend').value
         voice_name = self.get_parameter('voice_name').value
@@ -120,11 +130,32 @@ class TTSNode(Node):
             return
 
         try:
+            self._status_publisher.publish(String(data='STATE:RESPONDING'))
             self._status_publisher.publish(String(data=f'음성 응답 처리 시작: {message.data}'))
             self._provider.speak(message.data)
             self._status_publisher.publish(String(data=f'음성 응답 출력 중: {message.data}'))
+            self._status_publisher.publish(String(data='STATE:IDLE'))
         except Exception as exc:
             error_text = f'TTS 실패: {exc}'
+            self.get_logger().error(error_text)
+            self._status_publisher.publish(String(data=error_text))
+
+    def _apply_initial_volume(self) -> None:
+        initial_volume = int(self.get_parameter('speaker_volume_percent').value)
+        try:
+            backend = self._volume_controller.set_volume(initial_volume)
+            self.get_logger().info(f'Initial speaker volume applied: {initial_volume}% via {backend}')
+        except Exception as exc:
+            self.get_logger().warn(f'Initial speaker volume apply skipped: {exc}')
+
+    def _on_set_volume_request(self, message: Int32) -> None:
+        percent = max(0, min(100, int(message.data)))
+        try:
+            backend = self._volume_controller.set_volume(percent)
+            self._status_publisher.publish(String(data=f'로봇 스피커 볼륨 {percent}% 적용'))
+            self.get_logger().info(f'Speaker volume updated to {percent}% via {backend}')
+        except Exception as exc:
+            error_text = f'로봇 스피커 볼륨 변경 실패: {exc}'
             self.get_logger().error(error_text)
             self._status_publisher.publish(String(data=error_text))
 
@@ -139,4 +170,5 @@ def main(args: list[str] | None = None) -> None:
         rclpy.spin(node)
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()

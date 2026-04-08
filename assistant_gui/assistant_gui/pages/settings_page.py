@@ -19,6 +19,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QMessageBox,
     QMainWindow,
+    QSlider,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
 )
 
 try:
@@ -45,6 +49,15 @@ class SettingsPage(QWidget):
         self.setObjectName("settings_root")
         self._tts_template_editors: dict[str, QTextEdit] = {}
         self._syncing_tts_templates = False
+        self._size_preset_mapping = {
+            "초소형 (1280 x 420)": (1280, 420),
+            "와이드 낮음 (1600 x 420)": (1600, 420),
+            "와이드 컴팩트 (1600 x 480)": (1600, 480),
+            "소형 (1024 x 576)": (1024, 576),
+            "기본 (1600 x 560)": (1600, 560),
+            "HD (1600 x 900)": (1600, 900),
+            "FHD (1920 x 1080)": (1920, 1080),
+        }
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 8, 20, 20)
@@ -65,14 +78,9 @@ class SettingsPage(QWidget):
         display_form = QFormLayout(display_group)
 
         self.size_preset_combo = QComboBox()
-        self.size_preset_combo.addItems([
-            "소형 (1024 x 576)",
-            "기본 (1600 x 600)",
-            "HD (1600 x 900)",
-            "FHD (1920 x 1080)",
-        ])
+        self.size_preset_combo.addItems(list(self._size_preset_mapping.keys()))
         self.size_preset_combo.currentTextChanged.connect(self._on_size_preset_changed)
-        self._selected_resolution = (1600, 600)
+        self._selected_resolution = self._size_preset_mapping["기본 (1600 x 560)"]
 
         resolution_row = QHBoxLayout()
         resolution_row.addWidget(self.size_preset_combo)
@@ -115,11 +123,51 @@ class SettingsPage(QWidget):
         self.wakeword_reply_only_check = QCheckBox("호출어 응답 전용 테스트")
         self.wakeword_reply_only_check.toggled.connect(self._apply_wakeword_reply_only)
 
+        self.pc_local_voice_check = QCheckBox("노트북 로컬 호출어 사용")
+        self.pc_local_voice_check.toggled.connect(self._apply_pc_local_voice_enabled)
+
+        self.robot_voice_input_check = QCheckBox("로봇 음성 입력 사용")
+        self.robot_voice_input_check.toggled.connect(self._apply_robot_voice_input_enabled)
+        self.robot_voice_input_status_label = QLabel("로봇 음성 입력 런타임 토글 상태")
+        self.robot_voice_input_status_label.setWordWrap(True)
+        self.robot_voice_input_status_label.setProperty("class", "SubText")
+
+        self.person_greeting_check = QCheckBox("사람 인식 인사 로직 사용")
+        self.person_greeting_check.toggled.connect(self._apply_person_greeting_enabled)
+        self.person_greeting_status_label = QLabel("사람 인식 인사 로직 런타임 토글 상태")
+        self.person_greeting_status_label.setWordWrap(True)
+        self.person_greeting_status_label.setProperty("class", "SubText")
+
+        self.robot_volume_slider = QSlider(Qt.Horizontal)
+        self.robot_volume_slider.setRange(0, 100)
+        self.robot_volume_slider.setSingleStep(5)
+        self.robot_volume_slider.setPageStep(10)
+        self.robot_volume_slider.valueChanged.connect(self._on_robot_volume_slider_changed)
+        self.robot_volume_value_label = QLabel("35%")
+        self.robot_volume_value_label.setMinimumWidth(48)
+        self.robot_volume_apply_btn = QPushButton("로봇 볼륨 적용")
+        self.robot_volume_apply_btn.clicked.connect(self._apply_robot_speaker_volume)
+        self.robot_volume_status_label = QLabel("저장된 값만 바뀝니다. 적용 버튼을 누르면 로봇에 전송합니다.")
+        self.robot_volume_status_label.setWordWrap(True)
+        self.robot_volume_status_label.setProperty("class", "SubText")
+
+        volume_row = QHBoxLayout()
+        volume_row.addWidget(self.robot_volume_slider, stretch=1)
+        volume_row.addWidget(self.robot_volume_value_label)
+        volume_row.addWidget(self.robot_volume_apply_btn)
+
         runtime_form.addRow("테마", self.theme_combo)
         runtime_form.addRow("상태 갱신 주기(ms)", self.status_poll_spin)
         runtime_form.addRow("얼굴 애니메이션 FPS", self.face_fps_spin)
         runtime_form.addRow("기본 음성 엔진", self.voice_backend_combo)
         runtime_form.addRow(self.voice_engine_setting_label, self.edge_voice_combo)
+        runtime_form.addRow("노트북 로컬 호출어", self.pc_local_voice_check)
+        runtime_form.addRow("로봇 음성 입력", self.robot_voice_input_check)
+        runtime_form.addRow("로봇 음성 입력 상태", self.robot_voice_input_status_label)
+        runtime_form.addRow("사람 인식 인사", self.person_greeting_check)
+        runtime_form.addRow("사람 인식 상태", self.person_greeting_status_label)
+        runtime_form.addRow("로봇 스피커 볼륨", volume_row)
+        runtime_form.addRow("볼륨 적용 상태", self.robot_volume_status_label)
         runtime_form.addRow("음성 테스트 모드", self.wakeword_reply_only_check)
         runtime_form.addRow("테스트 탭 컨트롤러", QLabel("공유" if use_shared_controller else "독립"))
         general_layout.addWidget(runtime_group)
@@ -223,8 +271,49 @@ class SettingsPage(QWidget):
         test_layout.addLayout(test_btn_row)
         tts_layout.addWidget(test_group)
 
+        place_tab = QWidget()
+        place_layout = QVBoxLayout(place_tab)
+
+        place_desc = QLabel("장소 이름과 좌표를 여기서 수정하면 홈 화면 빠른 목적지와 이름 기반 안내에 함께 반영됩니다.")
+        place_desc.setWordWrap(True)
+        place_desc.setProperty("class", "SubText")
+        place_layout.addWidget(place_desc)
+
+        self.place_table = QTableWidget(0, 7)
+        self.place_table.setHorizontalHeaderLabels(["장소 이름", "frame", "x", "y", "yaw", "aliases", "OCR"])
+        self.place_table.verticalHeader().setVisible(False)
+        self.place_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.place_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.place_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.place_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.place_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.place_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.place_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        place_layout.addWidget(self.place_table, stretch=1)
+
+        place_btn_row = QHBoxLayout()
+        add_place_btn = QPushButton("행 추가")
+        add_place_btn.clicked.connect(self._add_place_row)
+        place_btn_row.addWidget(add_place_btn)
+
+        remove_place_btn = QPushButton("선택 행 삭제")
+        remove_place_btn.clicked.connect(self._remove_selected_place_rows)
+        place_btn_row.addWidget(remove_place_btn)
+
+        reload_place_btn = QPushButton("다시 불러오기")
+        reload_place_btn.clicked.connect(self._reload_place_table)
+        place_btn_row.addWidget(reload_place_btn)
+
+        save_place_btn = QPushButton("장소 저장")
+        save_place_btn.setProperty("class", "PrimaryBtn")
+        save_place_btn.clicked.connect(self._save_place_table)
+        place_btn_row.addWidget(save_place_btn)
+        place_btn_row.addStretch()
+        place_layout.addLayout(place_btn_row)
+
         self._sync_ui_from_runtime()
         self._sync_tts_templates_from_runtime()
+        self._reload_place_table()
         self._update_tts_test_preview()
         self._apply_local_theme_style()
 
@@ -243,6 +332,7 @@ class SettingsPage(QWidget):
 
         tabs.addTab(general_tab, "일반")
         tabs.addTab(tts_tab, "상황별 TTS")
+        tabs.addTab(place_tab, "장소 설정")
         tabs.addTab(face_tab_scroll, "로봇 얼굴")
         layout.addWidget(tabs)
 
@@ -250,15 +340,10 @@ class SettingsPage(QWidget):
         if self.main_window is None:
             return
         current_w = max(800, self.main_window.width())
-        current_h = max(480, self.main_window.height())
+        current_h = max(360, self.main_window.height())
 
-        preset_by_size = {
-            (1024, 576): "소형 (1024 x 576)",
-            (1600, 600): "기본 (1600 x 600)",
-            (1600, 900): "HD (1600 x 900)",
-            (1920, 1080): "FHD (1920 x 1080)",
-        }
-        preset = preset_by_size.get((current_w, current_h), "기본 (1600 x 600)")
+        preset_by_size = {size: label for label, size in self._size_preset_mapping.items()}
+        preset = preset_by_size.get((current_w, current_h), "기본 (1600 x 560)")
         self.size_preset_combo.blockSignals(True)
         self.size_preset_combo.setCurrentText(preset)
         self.size_preset_combo.blockSignals(False)
@@ -309,6 +394,24 @@ class SettingsPage(QWidget):
         self.wakeword_reply_only_check.blockSignals(True)
         self.wakeword_reply_only_check.setChecked(bool(getattr(self.main_window, "_wakeword_reply_only", False)))
         self.wakeword_reply_only_check.blockSignals(False)
+
+        self.pc_local_voice_check.blockSignals(True)
+        self.pc_local_voice_check.setChecked(bool(getattr(self.main_window, "_face_voice_loop_enabled", True)))
+        self.pc_local_voice_check.blockSignals(False)
+
+        self.robot_voice_input_check.blockSignals(True)
+        self.robot_voice_input_check.setChecked(bool(getattr(self.main_window, "_robot_voice_input_enabled", True)))
+        self.robot_voice_input_check.blockSignals(False)
+
+        self.person_greeting_check.blockSignals(True)
+        self.person_greeting_check.setChecked(bool(getattr(self.main_window, "_person_greeting_enabled", False)))
+        self.person_greeting_check.blockSignals(False)
+
+        current_robot_volume = int(getattr(self.main_window, "_robot_speaker_volume", 70))
+        self.robot_volume_slider.blockSignals(True)
+        self.robot_volume_slider.setValue(max(0, min(100, current_robot_volume)))
+        self.robot_volume_slider.blockSignals(False)
+        self._on_robot_volume_slider_changed(self.robot_volume_slider.value())
 
     def _sync_tts_templates_from_runtime(self) -> None:
         if self.main_window is None:
@@ -399,14 +502,101 @@ class SettingsPage(QWidget):
         self._sync_tts_templates_from_runtime()
         self._update_tts_test_preview()
 
+    def _set_place_cell(self, row: int, column: int, value: object) -> None:
+        item = QTableWidgetItem(str(value))
+        if column == 6:
+            item.setText("true" if bool(value) else "false")
+        self.place_table.setItem(row, column, item)
+
+    def _add_place_row(self, place: dict[str, object] | None = None) -> None:
+        row = self.place_table.rowCount()
+        self.place_table.insertRow(row)
+        place_data = place or {}
+        aliases = place_data.get("aliases", [])
+        if isinstance(aliases, list):
+            aliases_text = ", ".join(str(alias) for alias in aliases if str(alias).strip())
+        else:
+            aliases_text = str(aliases or "")
+        values = [
+            place_data.get("name", ""),
+            place_data.get("frame_id", "map"),
+            place_data.get("x", 0.0),
+            place_data.get("y", 0.0),
+            place_data.get("yaw", 0.0),
+            aliases_text,
+            place_data.get("ocr_enabled", False),
+        ]
+        for column, value in enumerate(values):
+            self._set_place_cell(row, column, value)
+
+    def _remove_selected_place_rows(self) -> None:
+        rows = sorted({index.row() for index in self.place_table.selectedIndexes()}, reverse=True)
+        for row in rows:
+            self.place_table.removeRow(row)
+
+    def _reload_place_table(self) -> None:
+        self.place_table.setRowCount(0)
+        if self.main_window is None or not hasattr(self.main_window, "get_named_place_items"):
+            return
+        for place in self.main_window.get_named_place_items():
+            self._add_place_row(place)
+
+    def _collect_place_rows(self) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for row in range(self.place_table.rowCount()):
+            name_item = self.place_table.item(row, 0)
+            frame_item = self.place_table.item(row, 1)
+            x_item = self.place_table.item(row, 2)
+            y_item = self.place_table.item(row, 3)
+            yaw_item = self.place_table.item(row, 4)
+            aliases_item = self.place_table.item(row, 5)
+            ocr_item = self.place_table.item(row, 6)
+
+            name = name_item.text().strip() if name_item is not None else ""
+            if not name:
+                continue
+
+            try:
+                x_value = float(x_item.text().strip()) if x_item is not None else 0.0
+                y_value = float(y_item.text().strip()) if y_item is not None else 0.0
+                yaw_value = float(yaw_item.text().strip()) if yaw_item is not None else 0.0
+            except ValueError as exc:
+                raise ValueError(f"{row + 1}번째 행 좌표 값이 올바르지 않습니다: {exc}") from exc
+
+            aliases_text = aliases_item.text().strip() if aliases_item is not None else ""
+            aliases = [alias.strip() for alias in aliases_text.split(",") if alias.strip()]
+            ocr_text = ocr_item.text().strip().lower() if ocr_item is not None else "false"
+            items.append(
+                {
+                    "name": name,
+                    "frame_id": frame_item.text().strip() if frame_item is not None and frame_item.text().strip() else "map",
+                    "x": x_value,
+                    "y": y_value,
+                    "yaw": yaw_value,
+                    "aliases": aliases,
+                    "ocr_enabled": ocr_text in {"1", "true", "yes", "on", "y"},
+                }
+            )
+        return items
+
+    def _save_place_table(self) -> None:
+        if self.main_window is None or not hasattr(self.main_window, "save_named_place_items"):
+            return
+        try:
+            items = self._collect_place_rows()
+        except ValueError as exc:
+            QMessageBox.warning(self, "장소 저장 실패", str(exc))
+            return
+
+        ok, message = self.main_window.save_named_place_items(items)
+        if not ok:
+            QMessageBox.warning(self, "장소 저장 실패", message)
+            return
+        QMessageBox.information(self, "장소 저장", message)
+        self._reload_place_table()
+
     def _on_size_preset_changed(self, text: str) -> None:
-        mapping = {
-            "소형 (1024 x 576)": (1024, 576),
-            "기본 (1600 x 600)": (1600, 600),
-            "HD (1600 x 900)": (1600, 900),
-            "FHD (1920 x 1080)": (1920, 1080),
-        }
-        size = mapping.get(text)
+        size = self._size_preset_mapping.get(text)
         if size is None:
             return
         self._selected_resolution = size
@@ -464,6 +654,41 @@ class SettingsPage(QWidget):
         if self.main_window is None:
             return
         self.main_window.apply_wakeword_reply_only(bool(checked))
+
+    def _apply_pc_local_voice_enabled(self, checked: bool) -> None:
+        if self.main_window is None:
+            return
+        self.main_window.apply_pc_local_voice_enabled(bool(checked))
+
+    def _apply_robot_voice_input_enabled(self, checked: bool) -> None:
+        if self.main_window is None:
+            return
+        ok, message = self.main_window.apply_robot_voice_input_enabled(bool(checked), publish=True)
+        self.robot_voice_input_status_label.setText(message)
+        if ok:
+            return
+        QMessageBox.warning(self, "로봇 음성 입력 적용 실패", message)
+
+    def _apply_person_greeting_enabled(self, checked: bool) -> None:
+        if self.main_window is None:
+            return
+        ok, message = self.main_window.apply_person_greeting_enabled(bool(checked), publish=True)
+        self.person_greeting_status_label.setText(message)
+        if ok:
+            return
+        QMessageBox.warning(self, "사람 인식 인사 적용 실패", message)
+
+    def _on_robot_volume_slider_changed(self, value: int) -> None:
+        self.robot_volume_value_label.setText(f"{int(value)}%")
+
+    def _apply_robot_speaker_volume(self) -> None:
+        if self.main_window is None:
+            return
+        ok, message = self.main_window.apply_robot_speaker_volume(self.robot_volume_slider.value(), publish=True)
+        self.robot_volume_status_label.setText(message)
+        if ok:
+            return
+        QMessageBox.warning(self, "로봇 볼륨 적용 실패", message)
 
     def _apply_theme(self, label: str) -> None:
         if self.main_window is None:

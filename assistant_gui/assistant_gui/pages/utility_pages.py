@@ -408,6 +408,8 @@ class MailPage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if self.main_window is not None and hasattr(self.main_window, "suspend_person_greeting"):
+            self.main_window.suspend_person_greeting("mail_ocr")
         self._resize_camera_view()
         self.reset_ui()
         if self.engine is not None:
@@ -423,6 +425,8 @@ class MailPage(QWidget):
         if self.engine is not None:
             self.engine.stop()
             self.engine = None
+        if self.main_window is not None and hasattr(self.main_window, "resume_person_greeting"):
+            self.main_window.resume_person_greeting("mail_ocr")
         super().hideEvent(event)
 
     def reset_ui(self):
@@ -598,6 +602,8 @@ class GesturePage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if self.main_window is not None and hasattr(self.main_window, "suspend_person_greeting"):
+            self.main_window.suspend_person_greeting("gesture_confirm")
         # Resize only when needed; avoids visible "grow" effect while entering this page.
         self._resize_camera_view(force=not self._camera_size_initialized)
         self.is_returning = False
@@ -624,6 +630,8 @@ class GesturePage(QWidget):
         if self.engine is not None:
             self.engine.stop()
             self.engine = None
+        if self.main_window is not None and hasattr(self.main_window, "resume_person_greeting"):
+            self.main_window.resume_person_greeting("gesture_confirm")
         super().hideEvent(event)
 
     def update_ui(self, cv_img, gesture_text):
@@ -636,7 +644,7 @@ class GesturePage(QWidget):
         self._apply_scaled_frame()
         self.target_lbl.setText(f"{self.target} 배송 완료\n인식 결과: {gesture_text}")
 
-        if "OK" in gesture_text:
+        if gesture_text.startswith("OK!"):
             if self.engine is not None:
                 self.engine.stop()
                 self.engine = None

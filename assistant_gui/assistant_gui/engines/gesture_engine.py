@@ -32,6 +32,8 @@ class GestureEngine(threading.Thread):
 
         self.is_running = False
         self.last_gesture = "인식 대기 중"
+        self._ok_frame_count = 0
+        self._ok_hold_frames = 10
 
     def _try_open(self, source, name):
         cap = cv2.VideoCapture(source)
@@ -74,10 +76,10 @@ class GestureEngine(threading.Thread):
         ring_straight = landmarks[16].y < landmarks[14].y
 
         if thumb_is_high and thumb_straight and index_folded and middle_folded:
-            return "칭찬해주셔서 감사합니다"
+            return "THUMBS_UP"
         if ok_dist < 0.05 and ring_straight:
-            return "OK! 복귀하겠습니다"
-        return "인식 중..."
+            return "OK"
+        return "SEARCHING"
 
     def run(self):
         self.is_running = True
@@ -96,8 +98,23 @@ class GestureEngine(threading.Thread):
                 results = self.hands.process(rgb_frame)
                 if results.multi_hand_landmarks:
                     for hand_landmarks in results.multi_hand_landmarks:
-                        current_gesture = self.classify_hand(hand_landmarks)
+                        detected = self.classify_hand(hand_landmarks)
+                        if detected == "OK":
+                            self._ok_frame_count += 1
+                            if self._ok_frame_count >= self._ok_hold_frames:
+                                current_gesture = "OK! 복귀하겠습니다"
+                            else:
+                                current_gesture = f"OK 확인 중... {self._ok_frame_count}/{self._ok_hold_frames}"
+                        else:
+                            self._ok_frame_count = 0
+                            if detected == "THUMBS_UP":
+                                current_gesture = "칭찬해주셔서 감사합니다"
+                            else:
+                                current_gesture = "인식 중..."
+                else:
+                    self._ok_frame_count = 0
             else:
+                self._ok_frame_count = 0
                 current_gesture = "제스처 API 미지원 (수동 확인 버튼 사용)"
 
             self.last_gesture = current_gesture

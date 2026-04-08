@@ -11,6 +11,70 @@ class StatusBriefExecution(BaseMissionExecution):
 
     def step(self) -> MissionEvent:
         action = str(self.mission.payload.get("action", "")).strip()
+        source_text = str(self.mission.payload.get("source_text", "")).strip()
+        runtime_data = self.context.runtime_data_service
+        if runtime_data is not None:
+            if action == "schedule_info":
+                return MissionEvent(
+                    mission_id=self.mission.mission_id,
+                    event_type="completed",
+                    terminal=True,
+                    details={
+                        "status": MissionStatus.COMPLETED.value,
+                        "speak_text": runtime_data.build_schedule_summary(source_text),
+                    },
+                )
+            if action in {"alarm_set", "alarm_add"}:
+                return MissionEvent(
+                    mission_id=self.mission.mission_id,
+                    event_type="completed",
+                    terminal=True,
+                    details={
+                        "status": MissionStatus.COMPLETED.value,
+                        "speak_text": runtime_data.add_alarm_from_text(source_text),
+                    },
+                )
+            if action == "alarm_info":
+                return MissionEvent(
+                    mission_id=self.mission.mission_id,
+                    event_type="completed",
+                    terminal=True,
+                    details={
+                        "status": MissionStatus.COMPLETED.value,
+                        "speak_text": runtime_data.build_alarm_summary(source_text),
+                    },
+                )
+            if action == "medication_info":
+                return MissionEvent(
+                    mission_id=self.mission.mission_id,
+                    event_type="completed",
+                    terminal=True,
+                    details={
+                        "status": MissionStatus.COMPLETED.value,
+                        "speak_text": runtime_data.build_medication_summary(source_text),
+                    },
+                )
+            if action == "schedule_add":
+                return MissionEvent(
+                    mission_id=self.mission.mission_id,
+                    event_type="completed",
+                    terminal=True,
+                    details={
+                        "status": MissionStatus.COMPLETED.value,
+                        "speak_text": runtime_data.add_schedule_from_text(source_text),
+                    },
+                )
+            if action == "medication_add":
+                return MissionEvent(
+                    mission_id=self.mission.mission_id,
+                    event_type="completed",
+                    terminal=True,
+                    details={
+                        "status": MissionStatus.COMPLETED.value,
+                        "speak_text": runtime_data.add_medication_from_text(source_text),
+                    },
+                )
+
         if action == "schedule_info":
             return MissionEvent(
                 mission_id=self.mission.mission_id,

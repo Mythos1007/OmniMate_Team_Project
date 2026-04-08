@@ -65,6 +65,10 @@ class OmniOrchestrator:
     def active_mission(self) -> Mission | None:
         return self._active_mission
 
+    @property
+    def active_execution(self) -> BaseMissionExecution | None:
+        return self._active_execution
+
     def update_battery(self, *, battery_level: float, charging: bool, charging_eta_minutes: int | None = None) -> None:
         self._state_machine.update_battery(
             battery_level=battery_level,
@@ -94,6 +98,10 @@ class OmniOrchestrator:
     def submit_command(self, command: CommandRequest) -> IntakeDecision:
         # 기능: intake 정책 검사 -> mission 생성 -> queue 등록 -> 필요 시 즉시 dispatch.
         self._sync_pending_count()
+        action = str(command.payload.get("action", "")).strip()
+        if action == "cancel_request":
+            return self._cancel_active_mission()
+
         state = self._state_machine.state
         accepted, reason = self._battery_policy.can_accept_command(command, state)
         if not accepted:
@@ -119,6 +127,17 @@ class OmniOrchestrator:
             destination = self._active_mission.target_location or self._active_mission.target_user
             if destination:
                 mission.payload["active_destination"] = destination
+
+        if self._should_execute_overlay(command, mission):
+            self._execute_overlay_mission(mission)
+            return IntakeDecision(
+                accepted=True,
+                reason="overlay_executed",
+                gui_message="요청을 즉시 처리했습니다.",
+                mission_id=mission.mission_id,
+                queued=False,
+            )
+
         self._queue.push(mission)
         self._sync_pending_count()
 
@@ -138,6 +157,67 @@ class OmniOrchestrator:
         if self._active_mission is None:
             self.dispatch_next()
         return decision
+
+    def _cancel_active_mission(self) -> IntakeDecision:
+        if self._active_mission is None or self._active_execution is None:
+            self._tts_manager.speak("현재 취소할 작업이 없습니다.", priority=TtsPriority.HIGH)
+            return IntakeDecision(
+                accepted=True,
+                reason="no_active_mission",
+                gui_message="현재 취소할 작업이 없습니다.",
+            )
+
+        try:
+            self._active_execution.cancel()
+        except Exception as exc:
+            self._logger.warning("Failed to cancel active execution %s: %s", self._active_mission.mission_id, exc)
+
+        cancelled_mission_id = self._active_mission.mission_id
+        self._active_mission.status = MissionStatus.CANCELLED
+        self._active_execution = None
+        self._active_mission = None
+        self._state_machine.clear_active_mission()
+        self._sync_pending_count()
+        self._tts_manager.speak("현재 작업을 취소했습니다.", priority=TtsPriority.HIGH)
+        self.dispatch_next()
+        return IntakeDecision(
+            accepted=True,
+            reason="cancelled_active_mission",
+            gui_message="현재 작업을 취소했습니다.",
+            mission_id=cancelled_mission_id,
+            queued=False,
+        )
+
+    def _should_execute_overlay(self, command: CommandRequest, mission: Mission) -> bool:
+        if self._active_mission is None:
+            return False
+        if command.requires_movement:
+            return False
+        return mission.mission_type in {MissionType.WEATHER_TTS, MissionType.STATUS_BRIEF}
+
+    def _execute_overlay_mission(self, mission: Mission) -> None:
+        mission.status = MissionStatus.RUNNING
+        execution = self._dispatcher.dispatch(mission)
+        self._logger.info("Executing overlay mission %s (%s)", mission.mission_id, mission.mission_type.value)
+
+        for _ in range(8):
+            event = execution.step()
+            speak_text = str(event.details.get("speak_text", "")).strip() if event.details else ""
+            if speak_text:
+                self._tts_manager.speak(speak_text)
+            if event.message_key:
+                self._tts_manager.speak_message(event.message_key, **event.message_params)
+            if event.terminal:
+                mission.status = MissionStatus(
+                    event.details.get("status", MissionStatus.COMPLETED.value)
+                ) if event.details.get("status") else MissionStatus.COMPLETED
+                return
+
+        self._logger.warning(
+            "Overlay mission %s (%s) did not terminate within step budget",
+            mission.mission_id,
+            mission.mission_type.value,
+        )
 
     def dispatch_next(self) -> Mission | None:
         # 기능: 현재 실행 중이 아니면 dispatch 가능한 다음 미션 하나를 선택 기능.
@@ -178,11 +258,45 @@ class OmniOrchestrator:
 
     def handle_face_recognized(self, user_name: str, *, now: datetime | None = None) -> bool:
         # 기능: 인사 overlay 이벤트. 메인 상태/미션을 건드리지 않고 TTS만 출력 기능.
-        current_time = now or datetime.utcnow()
-        if not self._greeting_manager.should_greet(user_name, now=current_time):
+        if not self.should_greet_registered_person(user_name, now=now):
             return False
-        self._tts_manager.speak_message("greeting.registered_person", user_name=user_name)
+        self.speak_message("greeting.registered_person", user_name=user_name)
         return True
+
+    def should_greet_registered_person(self, user_name: str, *, now: datetime | None = None) -> bool:
+        current_time = now or datetime.utcnow()
+        return self._greeting_manager.should_greet(user_name, now=current_time)
+
+    def pause_active_navigation_for_overlay(self) -> bool:
+        if self._active_execution is None:
+            return False
+        try:
+            return bool(self._active_execution.pause_navigation())
+        except Exception as exc:
+            self._logger.warning("Failed to pause active navigation for overlay: %s", exc)
+            return False
+
+    def resume_active_navigation_after_overlay(self) -> bool:
+        if self._active_execution is None:
+            return False
+        try:
+            return bool(self._active_execution.resume_navigation())
+        except Exception as exc:
+            self._logger.warning("Failed to resume active navigation after overlay: %s", exc)
+            return False
+
+    def speak_text(self, text: str, *, priority: TtsPriority = TtsPriority.NORMAL, interrupt: bool = False) -> None:
+        self._tts_manager.speak(text, priority=priority, interrupt=interrupt)
+
+    def speak_message(
+        self,
+        key: str,
+        *,
+        priority: TtsPriority = TtsPriority.NORMAL,
+        interrupt: bool = False,
+        **kwargs: object,
+    ) -> str:
+        return self._tts_manager.speak_message(key, priority=priority, interrupt=interrupt, **kwargs)
 
     def check_idle_timeout(self, *, timeout_seconds: float = 30.0) -> bool:
         """기능: 마지막 명령 이후 timeout_seconds 초 이상 입력이 없으면 복귀 미션을 삽입 기능.
@@ -220,6 +334,9 @@ class OmniOrchestrator:
         status = MissionStatus(event.details.get("status", MissionStatus.RUNNING.value)) if event.details.get("status") else None
         if self._active_mission is not None:
             self._state_machine.apply_event(self._active_mission, event_type=event.event_type, status=status)
+        speak_text = str(event.details.get("speak_text", "")).strip() if event.details else ""
+        if speak_text:
+            self._tts_manager.speak(speak_text)
         if event.message_key:
             self._tts_manager.speak_message(event.message_key, **event.message_params)
         self._sync_pending_count()

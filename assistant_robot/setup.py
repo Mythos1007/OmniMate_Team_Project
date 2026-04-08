@@ -37,6 +37,7 @@ setup(
             'scheduler_node = assistant_robot.nodes.scheduler_node:main',
             'gui_bridge_node = assistant_robot.nodes.gui_bridge_node:main',
             'battery_monitor_node = assistant_robot.nodes.battery_monitor_node:main',
+            'person_recognition_node = assistant_robot.nodes.person_recognition_node:main',
             'assistant_robot_demo = assistant_robot.demo:main',
         ],
     },

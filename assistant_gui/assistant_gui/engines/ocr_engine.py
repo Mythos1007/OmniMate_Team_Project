@@ -5,6 +5,14 @@ import os
 import cv2
 import easyocr
 
+try:
+    from assistant_gui.engines.delivery_target_catalog import (
+        DELIVERY_TARGET_KEYWORDS,
+        match_delivery_target,
+    )
+except ModuleNotFoundError:
+    from engines.delivery_target_catalog import DELIVERY_TARGET_KEYWORDS, match_delivery_target
+
 
 class OcrEngine(threading.Thread):
     """웹캠 프레임에서 부서명을 OCR로 감지하는 백그라운드 스레드."""
@@ -25,19 +33,7 @@ class OcrEngine(threading.Thread):
         self.current_mode = "SCANNING"
         self.temp_target = ""
         self.is_processing = False
-        self.OFFICE_KEYWORDS = [
-            "영업팀",
-            "개발팀",
-            "기획팀",
-            "인사팀",
-            "마케팅팀",
-            "회계팀",
-            "기술팀",
-            "CAD팀",
-            "IT팀",
-            "연구소",
-            "디자인팀",
-        ]
+        self.OFFICE_KEYWORDS = list(DELIVERY_TARGET_KEYWORDS)
 
     @classmethod
     def _load_shared_reader(cls):
@@ -139,7 +135,7 @@ class OcrEngine(threading.Thread):
         try:
             results = self.reader.readtext(roi, detail=0)
             text = "".join(results).replace(" ", "")
-            match = next((k for k in self.OFFICE_KEYWORDS if k in text), "")
+            match = match_delivery_target(text)
             if match:
                 self.temp_target = match
                 self.current_mode = "CONFIRMING"

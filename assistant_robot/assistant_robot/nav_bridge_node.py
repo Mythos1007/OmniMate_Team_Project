@@ -4,6 +4,7 @@ import math
 from typing import Any
 
 from assistant_interfaces.action import GuideToNamedPlace
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, Quaternion
 from nav2_msgs.action import NavigateToPose
 
@@ -12,29 +13,15 @@ from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalRespons
 from rclpy.action.server import ServerGoalHandle
 from rclpy.node import Node
 
+from assistant_robot.services.place_catalog import PlaceCatalog
+
 
 class NavBridgeNode(Node):
     """이름 기반 목적지를 로컬 액션 서버를 통해 Nav2 목표로 변환 기능."""
 
     def __init__(self) -> None:
         super().__init__('nav_bridge_node')
-
-        self.declare_parameter('named_places.home.frame_id', 'map')
-        self.declare_parameter('named_places.home.x', 0.0)
-        self.declare_parameter('named_places.home.y', 0.0)
-        self.declare_parameter('named_places.home.yaw', 0.0)
-        self.declare_parameter('named_places.lab.frame_id', 'map')
-        self.declare_parameter('named_places.lab.x', 2.5)
-        self.declare_parameter('named_places.lab.y', 1.0)
-        self.declare_parameter('named_places.lab.yaw', 0.0)
-        self.declare_parameter('named_places.meeting_room.frame_id', 'map')
-        self.declare_parameter('named_places.meeting_room.x', 5.0)
-        self.declare_parameter('named_places.meeting_room.y', -1.0)
-        self.declare_parameter('named_places.meeting_room.yaw', 1.57)
-        self.declare_parameter('named_places.desk.frame_id', 'map')
-        self.declare_parameter('named_places.desk.x', 1.2)
-        self.declare_parameter('named_places.desk.y', 3.4)
-        self.declare_parameter('named_places.desk.yaw', 3.14)
+        self._place_catalog = PlaceCatalog()
 
         self._nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self._action_server = ActionServer(
@@ -101,10 +88,10 @@ class NavBridgeNode(Node):
         nav_result = await nav_result_future
 
         result = GuideToNamedPlace.Result()
-        if nav_result.status == 4:
+        if nav_result.status != GoalStatus.STATUS_SUCCEEDED:
             goal_handle.abort()
             result.success = False
-            result.message = f'Navigation failed for {place_name}.'
+            result.message = f'Navigation failed for {place_name}. status={nav_result.status}'
             return result
 
         goal_handle.succeed()
@@ -113,13 +100,14 @@ class NavBridgeNode(Node):
         return result
 
     def _named_place_exists(self, place_name: str) -> bool:
-        return self.has_parameter(f'named_places.{place_name}.x')
+        return self._place_catalog.resolve(place_name) in self._place_catalog.named_places()
 
     def _build_pose(self, place_name: str) -> PoseStamped:
-        frame_id = self.get_parameter(f'named_places.{place_name}.frame_id').value
-        x_value = float(self.get_parameter(f'named_places.{place_name}.x').value)
-        y_value = float(self.get_parameter(f'named_places.{place_name}.y').value)
-        yaw_value = float(self.get_parameter(f'named_places.{place_name}.yaw').value)
+        canonical_name = self._place_catalog.resolve(place_name)
+        metadata = self._place_catalog.place_metadata()[canonical_name]
+        frame_id = str(metadata.get('frame_id', 'map'))
+        x_value = float(metadata.get('x', 0.0))
+        y_value = float(metadata.get('y', 0.0))
 
         pose = PoseStamped()
         pose.header.frame_id = frame_id
@@ -127,7 +115,12 @@ class NavBridgeNode(Node):
         pose.pose.position.x = x_value
         pose.pose.position.y = y_value
         pose.pose.position.z = 0.0
-        pose.pose.orientation = self._quaternion_from_yaw(yaw_value)
+        if 'orientation_z' in metadata and 'orientation_w' in metadata:
+            pose.pose.orientation.z = float(metadata.get('orientation_z', 0.0))
+            pose.pose.orientation.w = float(metadata.get('orientation_w', 1.0))
+        else:
+            yaw_value = float(metadata.get('yaw', 0.0))
+            pose.pose.orientation = self._quaternion_from_yaw(yaw_value)
         return pose
 
     def _quaternion_from_yaw(self, yaw: float) -> Quaternion:
