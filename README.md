@@ -14,27 +14,78 @@
 
 ## 2) 필수 Python 패키지
 
-아래 패키지를 활성 환경(venv 등)에 설치하세요.
+### 2-1) 시스템 패키지 먼저 설치 (apt 필요)
+
+```bash
+sudo apt update
+sudo apt install -y \
+  python3-pyaudio \
+  portaudio19-dev \
+  alsa-utils \
+  libatlas-base-dev \
+  libopenblas-dev
+```
+
+### 2-2) 핵심 Python 패키지 (setuptools에서 정의)
+
+각 패키지의 setup.py에서 자동 설치:
+- **assistant_gui**: PySide6, requests, SpeechRecognition, PyYAML
+- **assistant_audio**: edge-tts, faster-whisper, requests, sounddevice, vosk
+- **assistant_brain**: setuptools 만
+
+### 2-3) 확장 Python 패키지 (공식 스크립트/빌드 시)
 
 ```bash
 pip install \
-  PySide6==6.7.2 \
-  requests==2.32.3 \
-  SpeechRecognition==3.10.4 \
-  edge-tts==6.1.13 \
-  faster-whisper==1.0.3 \
+  PySide6==6.11.0 \
+  requests==2.33.1 \
+  SpeechRecognition==3.16.0 \
+  edge-tts==7.2.8 \
+  faster-whisper==1.0.11 \
+  vosk==0.3.45 \
+  google-cloud-speech==2.25.0 \
   PyYAML==6.0.2 \
   numpy==1.26.4 \
-  opencv-python==4.10.0.84
+  scipy==1.15.3 \
+  opencv-python==4.8.0.74 \
+  mediapipe==0.10.9 \
+  face-recognition==1.3.0 \
+  face-recognition-models==0.3.0 \
+  easyocr==1.7.1 \
+  ultralytics==8.4.17 \
+  deepface==0.0.99 \
+  mtcnn==1.0.0 \
+  scikit-image==0.25.2 \
+  sounddevice==0.5.5 \
+  pandas==2.3.3 \
+  pytz==2022.1 \
+  python-dateutil==2.9.0.post0
 ```
 
-선택 설치(클라우드 TTS SDK 직접 사용 시):
+### 2-4) 선택 설치 (클라우드/특수 기능)
 
 ```bash
+# 클라우드 TTS
 pip install elevenlabs==1.8.0 cartesia==1.0.0
+
+# AI/ML (대규모 모델, 이미 설치됨)
+# pip install tensorflow==2.15.1 torch==2.11.0 torchvision==0.26.0
 ```
 
-## 3) 필수 ROS 2 패키지(apt)
+### 2-5) NumPy 호환성 주의
+
+- **mediapipe + NumPy 2.x 호환성 문제**: NumPy를 1.x 로 유지
+  ```bash
+  pip install 'numpy<2.0'
+  ```
+- 설치 후 환경 확인:
+  ```bash
+  python3 -c "import import mediapipe; print(mediapipe.__version__)"
+  ```
+
+## 3) 필수 ROS 2 패키지 (apt)
+
+### 3-1) 기본 메시지/서비스 타입
 
 ```bash
 sudo apt update
@@ -44,7 +95,33 @@ sudo apt install -y \
   ros-humble-std-msgs \
   ros-humble-std-srvs \
   ros-humble-launch \
-  ros-humble-launch-ros
+  ros-humble-launch-ros \
+  ros-humble-sensor-msgs \
+  ros-humble-nav-msgs \
+  ros-humble-control-msgs \
+  ros-humble-diagnostics
+```
+
+### 3-2) 선택 설치 (특정 기능)
+
+```bash
+# TurtleBot 3 패키지 (로봇 사용 시)
+sudo apt install -y \
+  ros-humble-turtlebot3 \
+  ros-humble-turtlebot3-msgs \
+  ros-humble-dynamixel-sdk
+
+# 고급 네비게이션 (경로 계획/SLAM)
+sudo apt install -y \
+  ros-humble-nav2-core \
+  ros-humble-slam-toolbox \
+  ros-humble-cartographer
+```
+
+### 3-3) 설치 확인
+
+```bash
+ros2 pkg list | grep -E "geometry_msgs|nav2_msgs|std_msgs"
 ```
 
 ## 4) API 키 보안 관리 (공용 시크릿 1개)
@@ -172,32 +249,79 @@ API 발급 링크:
 
 ## 6) 빌드/실행
 
+### 6-1) 빌드
+
 ```bash
-cd /home/mythos/assistant_ws
-colcon build --base-paths src/assistant
+cd /home/omnimate/OmniMate_ws
+colcon build --base-paths src/assistant --symlink-install
 source install/setup.bash
 ```
 
-대표 실행 예시:
+### 6-2) 빌드 검증
 
 ```bash
-# GUI
-ros2 run assistant_gui assistant_gui_node
+# 설치된 패키지 확인
+ros2 pkg list | grep assistant
 
-# Brain
-ros2 run assistant_brain intent_router_node
-ros2 run assistant_brain dialog_manager_node
+# Python 패키지 임포트 확인
+python3 -c "import assistant_gui; import assistant_audio; import assistant_brain; print('All imports OK')"
 
-# Audio
+# 마이크/오디오 확인
+arecord -l
+```
+
+### 6-3) 개별 노드 실행
+
+**Audio 파이프라인:**
+```bash
+# Wake word 감지
 ros2 run assistant_audio wake_word_node
+
+# STT (음성 인식)
 ros2 run assistant_audio stt_node
+
+# TTS (음성 합성)
 ros2 run assistant_audio tts_node
 
-# Robot Orchestrator
+# 로컬 테스트 (마이크)
+ros2 run assistant_audio mic_stt_test
+```
+
+**Brain (대화/의도):**
+```bash
+# 의도 라우팅
+ros2 run assistant_brain intent_router_node
+
+# 대화 관리
+ros2 run assistant_brain dialog_manager_node
+```
+
+**GUI (대시보드):**
+```bash
+# 메인 GUI
+ros2 run assistant_gui assistant_gui_node
+```
+
+**Robot (임무 오케스트레이션):**
+```bash
+# 로봇 오케스트레이터 (배달/내비게이션)
 ros2 run assistant_robot omni_orchestrator_node
 ```
 
-## 6-1) 런타임 환경변수(자주 쓰는 항목)
+### 6-4) 통합 실행 (Launch 파일)
+
+```bash
+# 전체 시스템
+ros2 launch assistant_bringup complete.launch.xml
+
+# GUI + Audio 만
+ros2 launch assistant_bringup gui_audio.launch.xml
+
+# 음성 테스트 모드
+ros2 launch assistant_bringup voice_test.launch.xml
+```
+
+## 7) 런타임 환경변수(자주 쓰는 항목)
 
 - `ASSISTANT_SECRETS_FILE`: 공용 시크릿 파일 경로
 - `ASSISTANT_ENABLE_ROS_BRIDGE`: GUI에서 ROS 브리지 활성화 (`1/true`)
@@ -206,7 +330,115 @@ ros2 run assistant_robot omni_orchestrator_node
 - `ASSISTANT_ROBOT_IP`: GUI/PC가 붙을 원격 로봇 IP. 미지정 시 현재 기본값은 `192.168.96.23`
 - `ASSISTANT_TURTLEBOT_IP`: 기존 호환용 로봇 IP 이름. 없으면 `ASSISTANT_ROBOT_IP`를 우선 사용
 
-## 7) 문서/주석 정리 원칙
+## 8) 트러블슈팅
+
+### 8-1) 음성 인식 (STT) 문제
+
+**증상:** "speech_recognition 패키지가 없어 음성 인식을 실행할 수 없습니다"
+```bash
+# 해결
+pip install SpeechRecognition vosk google-cloud-speech
+```
+
+**증상:** 마이크가 감지되지 않음
+```bash
+# 마이크 장치 확인
+arecord -l
+
+# 시스템 오디오 테스트
+arecord -f dat test.wav && aplay test.wav
+
+# pyaudio 설치 (시스템 권한 필요)
+sudo apt install python3-pyaudio portaudio19-dev
+```
+
+### 8-2) mediapipe 호환성 문제
+
+**증상:** `ImportError: cannot import name '_ARRAY_API'` 또는 `numpy.core.multiarray not found`
+```bash
+# NumPy 버전 고정
+pip install 'numpy<2.0'
+```
+
+### 8-3) GUI 시작 오류
+
+**증상:** `ModuleNotFoundError: No module named 'PySide6'`
+```bash
+# PySide6와 의존성 재설치
+pip install PySide6==6.11.0
+pip install --upgrade --force-reinstall PySide6
+```
+
+**증상:** GUI 창이 안 나타짐 (X11 / 원격 디스플레이)
+```bash
+# X11 권한 확인
+echo $DISPLAY
+
+# 필요시 명시
+export DISPLAY=:0
+```
+
+### 8-4) ROS 2 빌드 오류
+
+**증상:** `Package 'ament_cmake_python' not found`
+```bash
+# ROS 2 환경 재로드
+source /opt/ros/humble/setup.bash
+```
+
+**증상:** `colcon: command not found`
+```bash
+# colcon 설치
+sudo apt install python3-colcon-common-extensions
+```
+
+### 8-5) 환경변수 확인
+
+```bash
+# 모든 환경변수 확인
+env | grep ASSISTANT
+
+# 특정 변수
+echo $ASSISTANT_SECRETS_FILE
+echo $ASSISTANT_ROBOT_IP
+```
+
+### 8-6) 설치 검증 스크립트
+
+```bash
+#!/bin/bash
+echo "=== OmniMate Assistant 설치 검증 ==="
+
+echo "[1] Python 패키지 확인..."
+python3 -c "
+import sys
+packages = ['PySide6', 'rclpy', 'requests', 'PyYAML', 'opencv_cv2', 'numpy', 
+           'mediapipe', 'speech_recognition', 'edge_tts', 'vosk']
+missing = []
+for pkg in packages:
+    try:
+        __import__(pkg.replace('_', '-'))
+    except ImportError:
+        missing.append(pkg)
+if missing:
+    print(f'❌ 누락: {missing}')
+else:
+    print('✅ 모든 핵심 패키지 OK')
+"
+
+echo "[2] ROS 2 패키지 확인..."
+ros2 pkg list | grep -q assistant_gui && echo "✅ assistant_gui OK" || echo "❌ assistant_gui 미설치"
+
+echo "[3] 마이크 확인..."
+arecord -l > /dev/null 2>&1 && echo "✅ 마이크 감지됨" || echo "❌ 마이크 미감지"
+
+echo "[4] 환경변수 확인..."
+[ -n "$ASSISTANT_SECRETS_FILE" ] && echo "✅ ASSISTANT_SECRETS_FILE 설정됨" || echo "⚠️  ASSISTANT_SECRETS_FILE 미설정"
+
+echo "=== 검증 완료 ==="
+```
+
+## 9) 문서/주석 정리 원칙
 
 - 공개 저장소 기준으로 민감정보(실키/토큰) 하드코딩 금지
 - 복잡한 로직에만 짧고 명확한 주석 유지

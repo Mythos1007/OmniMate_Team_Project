@@ -26,7 +26,26 @@ import yaml
 CURRENT_DIR = Path(__file__).resolve().parent
 PACKAGE_PARENT = CURRENT_DIR.parent
 ROBOT_PACKAGE_PARENT = PACKAGE_PARENT.parent / "assistant_robot"
-ROBOT_NAMED_PLACE_CONFIG = ROBOT_PACKAGE_PARENT / "assistant_robot" / "config" / "named_places.yaml"
+
+
+def _resolve_named_place_config_path() -> Path:
+    env_path = os.environ.get("ASSISTANT_NAMED_PLACES_FILE", "").strip()
+    if env_path:
+        candidate = Path(env_path).expanduser().resolve()
+        if candidate.exists() or candidate.parent.exists():
+            return candidate
+
+    candidates = (
+        PACKAGE_PARENT.parent / "assistant_bringup" / "config" / "named_places_catalog.yaml",
+        ROBOT_PACKAGE_PARENT / "assistant_robot" / "config" / "named_places.yaml",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+ROBOT_NAMED_PLACE_CONFIG = _resolve_named_place_config_path()
 for candidate in (PACKAGE_PARENT, CURRENT_DIR, ROBOT_PACKAGE_PARENT):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
@@ -35,15 +54,32 @@ for candidate in (PACKAGE_PARENT, CURRENT_DIR, ROBOT_PACKAGE_PARENT):
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                QHBoxLayout, QLabel, QPushButton, QStackedWidget,
                                QFrame)
-from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtCore import Qt, QTimer, QSettings, Signal
+try:
+    import rclpy
+    from rclpy.action import ActionClient
+    from rclpy.node import Node as RosNode
+    from std_msgs.msg import Bool as RosBool
+    from std_msgs.msg import Int32 as RosInt32
+    from std_msgs.msg import String as RosString
+    ROS_GUI_COMMANDS_AVAILABLE = True
+except Exception:
+    ActionClient = None
+    RosNode = None
+    RosBool = None
+    RosInt32 = None
+    RosString = None
+    ROS_GUI_COMMANDS_AVAILABLE = False
 try:
     from assistant_gui.engines.weather_engine import WeatherEngine
     from assistant_gui.engines.schedule_manager import ScheduleManager
     from assistant_gui.engines.alarm_manager import AlarmManager
-    from assistant_gui.engines.ocr_engine import OcrEngine
     from assistant_gui.engines.battery_engine import BatteryEngine
     from assistant_gui.engines.pose_engine import PoseEngine
+    from assistant_gui.runtime_paths import resolve_runtime_data_path
     from assistant_gui.integrations.ros_state_bridge import RosStateBridge
+    from assistant_gui.integrations.data_sync_bridge import DataSyncBridge
+    from assistant_gui.integrations.ros_runtime import get_shared_ros_runtime
     from assistant_gui.face.face_controller import FaceController
     from assistant_gui.face.face_page import FacePage as UnifiedFacePage
     from assistant_gui.styles import GLOBAL_STYLE, THEME_STYLES
@@ -72,10 +108,12 @@ except ModuleNotFoundError:
     from engines.weather_engine import WeatherEngine
     from engines.schedule_manager import ScheduleManager
     from engines.alarm_manager import AlarmManager
-    from engines.ocr_engine import OcrEngine
     from engines.battery_engine import BatteryEngine
     from engines.pose_engine import PoseEngine
+    from runtime_paths import resolve_runtime_data_path
     from integrations.ros_state_bridge import RosStateBridge
+    from integrations.data_sync_bridge import DataSyncBridge
+    from integrations.ros_runtime import get_shared_ros_runtime
     from face.face_controller import FaceController
     from face.face_page import FacePage as UnifiedFacePage
     from styles import GLOBAL_STYLE, THEME_STYLES
@@ -101,7 +139,186 @@ except ModuleNotFoundError:
     from engines.voice_response_builder import build_contextual_voice_response
 
 
+class GuiRosCommandClient:
+    def __init__(self) -> None:
+        if not ROS_GUI_COMMANDS_AVAILABLE:
+            raise RuntimeError("ROS command client unavailable")
+        if not rclpy.ok():
+            rclpy.init()
+        geometry_msg_module = importlib.import_module("geometry_msgs.msg")
+        self._pose_with_covariance_type = getattr(geometry_msg_module, "PoseWithCovarianceStamped")
+        self._runtime = get_shared_ros_runtime()
+        self._node = RosNode("assistant_gui_command_node")
+        self._initial_pose_publisher = self._node.create_publisher(self._pose_with_covariance_type, "/initialpose", 10)
+        self._guide_action_type = self._resolve_guide_action_type()
+        self._guide_client = None
+        if self._guide_action_type is not None:
+            self._guide_client = ActionClient(self._node, self._guide_action_type, "/assistant/guide_to_named_place")
+        self._publishers: dict[tuple[str, str], object] = {}
+        self._runtime.add_node(self._node)
+        self._pending_futures: list[object] = []
+        self._active_goal_handles: list[object] = []
+        self._active_result_futures: list[object] = []
+
+    @staticmethod
+    def _resolve_guide_action_type():
+        for module_name in ("assistant_interfaces.action", "assistant_msgs.action"):
+            try:
+                guide_action_module = importlib.import_module(module_name)
+                return getattr(guide_action_module, "GuideToNamedPlace")
+            except Exception:
+                continue
+        return None
+
+    def close(self) -> None:
+        self._runtime.remove_node(self._node)
+
+    def is_initial_pose_receiver_ready(self) -> bool:
+        try:
+            return self._initial_pose_publisher.get_subscription_count() > 0
+        except Exception:
+            return False
+
+    def publish_initial_pose(self, *, x: float, y: float, yaw: float, frame_id: str = "map") -> None:
+        message = self._pose_with_covariance_type()
+        message.header.frame_id = frame_id
+        message.header.stamp = self._node.get_clock().now().to_msg()
+        message.pose.pose.position.x = float(x)
+        message.pose.pose.position.y = float(y)
+        message.pose.pose.position.z = 0.0
+        message.pose.pose.orientation.z = math.sin(float(yaw) / 2.0)
+        message.pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
+        covariance = [0.0] * 36
+        covariance[0] = 0.25
+        covariance[7] = 0.25
+        covariance[35] = 0.06853891945200942
+        message.pose.covariance = covariance
+        self._initial_pose_publisher.publish(message)
+
+    def _get_cached_publisher(self, topic_name: str, message_type: object):
+        key = (str(topic_name), getattr(message_type, "__name__", str(message_type)))
+        publisher = self._publishers.get(key)
+        if publisher is None:
+            publisher = self._node.create_publisher(message_type, topic_name, 10)
+            self._publishers[key] = publisher
+        return publisher
+
+    @staticmethod
+    def _wait_for_subscriber(publisher: object, *, timeout_sec: float) -> bool:
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        while time.monotonic() < deadline:
+            try:
+                if publisher.get_subscription_count() > 0:
+                    return True
+            except Exception:
+                return False
+            time.sleep(0.05)
+        try:
+            return publisher.get_subscription_count() > 0
+        except Exception:
+            return False
+
+    def publish_string(self, topic_name: str, text: str, *, timeout_sec: float = 0.45) -> tuple[bool, str]:
+        publisher = self._get_cached_publisher(topic_name, RosString)
+        if not self._wait_for_subscriber(publisher, timeout_sec=timeout_sec):
+            return False, "Timed out waiting for subscribers"
+        message = RosString()
+        message.data = str(text)
+        publisher.publish(message)
+        return True, "ok"
+
+    def publish_bool(self, topic_name: str, value: bool, *, timeout_sec: float = 0.45) -> tuple[bool, str]:
+        publisher = self._get_cached_publisher(topic_name, RosBool)
+        if not self._wait_for_subscriber(publisher, timeout_sec=timeout_sec):
+            return False, "Timed out waiting for subscribers"
+        message = RosBool()
+        message.data = bool(value)
+        publisher.publish(message)
+        return True, "ok"
+
+    def publish_int(self, topic_name: str, value: int, *, timeout_sec: float = 0.45) -> tuple[bool, str]:
+        publisher = self._get_cached_publisher(topic_name, RosInt32)
+        if not self._wait_for_subscriber(publisher, timeout_sec=timeout_sec):
+            return False, "Timed out waiting for subscribers"
+        message = RosInt32()
+        message.data = int(value)
+        publisher.publish(message)
+        return True, "ok"
+
+    def send_guide_goal(self, place_name: str) -> tuple[bool, str]:
+        if self._guide_client is None or self._guide_action_type is None:
+            return False, "guide_to_named_place 액션 타입을 불러오지 못했습니다."
+        if not self._guide_client.wait_for_server(timeout_sec=1.5):
+            return False, "guide_to_named_place 액션 서버를 찾지 못했습니다."
+        goal = self._guide_action_type.Goal()
+        goal.place_name = str(place_name)
+        future = self._guide_client.send_goal_async(goal)
+        self._pending_futures.append(future)
+
+        def _cleanup_done(done_future):
+            try:
+                goal_handle = done_future.result()
+                if goal_handle is None:
+                    return
+                if not goal_handle.accepted:
+                    print(f"[GuiRosCommandClient] guide goal rejected: {place_name}")
+                    return
+
+                self._active_goal_handles.append(goal_handle)
+                result_future = goal_handle.get_result_async()
+                self._active_result_futures.append(result_future)
+
+                def _release_result(done_result_future):
+                    try:
+                        self._active_result_futures.remove(done_result_future)
+                    except ValueError:
+                        pass
+                    try:
+                        self._active_goal_handles.remove(goal_handle)
+                    except ValueError:
+                        pass
+
+                result_future.add_done_callback(_release_result)
+            except Exception as exc:
+                print(f"[GuiRosCommandClient] guide goal error: {exc}")
+            finally:
+                try:
+                    self._pending_futures.remove(done_future)
+                except ValueError:
+                    pass
+
+        future.add_done_callback(_cleanup_done)
+        return True, "ok"
+
+    def cancel_active_guide_goals(self) -> tuple[bool, str]:
+        cancelled_count = 0
+
+        pending_futures = list(self._pending_futures)
+        for future in pending_futures:
+            try:
+                if not future.done():
+                    if future.cancel():
+                        cancelled_count += 1
+            except Exception:
+                continue
+
+        active_handles = list(self._active_goal_handles)
+        for goal_handle in active_handles:
+            try:
+                goal_handle.cancel_goal_async()
+                cancelled_count += 1
+            except Exception:
+                continue
+
+        if cancelled_count <= 0:
+            return False, "취소 가능한 직접 안내 goal이 없습니다."
+        return True, f"직접 안내 goal {cancelled_count}건에 취소를 요청했습니다."
+
+
 class OmniMateMain(QMainWindow):
+    runtime_capability_status_ready = Signal(bool, bool)
+    remote_audio_sync_finished = Signal(bool, bool)
+
     def __init__(self):
         super().__init__()
         self._settings = QSettings("OmniMate", "AssistantGUI")
@@ -133,12 +350,47 @@ class OmniMateMain(QMainWindow):
         self._tts_defaults: dict[str, str] = {key: default for key, _label, default in TTS_SCENARIO_DEFAULTS}
         self._tts_labels: dict[str, str] = {key: label for key, label, _default in TTS_SCENARIO_DEFAULTS}
         self._tts_templates: dict[str, str] = {}
+        self._pending_mail_delivery_target = ""
+        self._mail_confirmation_pending = False
+        self._mail_returning_home = False
+        self._last_runtime_status_text = ""
+        self._temporary_navigation_place_name = ""
+        self._initial_pose_published = False
+        self._initial_pose_attempts = 0
+        self._initial_pose_wait_checks = 0
+        self._localized_pose_received = False
+        self._ros_command_client = None
+        self._runtime_status_probe_inflight = False
+        self._data_sync_bridge = None
+        self._data_sync_version = 0
+        self._remote_audio_sync_inflight = False
+        self._remote_robot_audio_available = False
+        self._last_remote_audio_apply_ok = False
+        self._startup_audio_sync_active = True
+        self._startup_audio_sync_attempts = 0
+        self._startup_audio_sync_max_attempts = 12
+        self._last_robot_tts_config_payload = ""
+        self._last_robot_tts_config_sent_at = 0.0
+        self._require_goal_orientation = str(
+            self._settings.value(
+                "navigation/require_goal_orientation",
+                os.getenv("ASSISTANT_NAV_REQUIRE_GOAL_ORIENTATION", "false"),
+            )
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self.runtime_capability_status_ready.connect(self._apply_runtime_capability_status)
+        self.remote_audio_sync_finished.connect(self._on_remote_audio_sync_finished)
         self._load_tts_templates()
-        schedule_path = str(Path(__file__).resolve().parent / "schedules.json")
-        self.schedule_mgr = ScheduleManager(filename=schedule_path)
-        alarm_path = str(Path(__file__).resolve().parent / "alarms.json")
-        self.alarm_mgr = AlarmManager(filename=alarm_path)
-        OcrEngine.start_reader_warmup()
+        schedule_path = str(resolve_runtime_data_path(__file__, "ASSISTANT_SCHEDULES_FILE", "schedules.json"))
+        self.schedule_mgr = ScheduleManager(
+            filename=schedule_path,
+            on_save=lambda _payload: self._on_runtime_data_saved("schedule"),
+        )
+        alarm_path = str(resolve_runtime_data_path(__file__, "ASSISTANT_ALARMS_FILE", "alarms.json"))
+        self.alarm_mgr = AlarmManager(
+            filename=alarm_path,
+            on_save=lambda _payload: self._on_runtime_data_saved("alarm"),
+        )
+        self._start_ocr_warmup_if_available()
 
         self.weather_engine = WeatherEngine()
         self.weather_engine.start()
@@ -152,8 +404,8 @@ class OmniMateMain(QMainWindow):
         self.pose_engine.start()
 
         self.setWindowTitle("OmniMate - AI Robot Dashboard")
-        self.setMinimumSize(900, 360)
-        self.resize(1600, 560)
+        self.setMinimumSize(960, 540)
+        self.apply_window_size(1920, 1080)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -251,15 +503,42 @@ class OmniMateMain(QMainWindow):
         self._ros_bridge = None
         if os.getenv('ASSISTANT_ENABLE_ROS_BRIDGE', '0').strip() in {'1', 'true', 'TRUE'}:
             self._start_ros_bridge()
+            self._start_data_sync_bridge()
 
         self._status_poll_timer = QTimer(self)
         self._status_poll_timer.timeout.connect(self._refresh_runtime_capability_status)
         self._status_poll_timer.start(3000)
         self._refresh_runtime_capability_status()
+        QTimer.singleShot(500, self._get_ros_command_client)
 
         self._restore_ui_preferences()
-        QTimer.singleShot(1800, self._sync_remote_audio_preferences)
+        self._schedule_startup_audio_sync(delay_ms=900)
         QTimer.singleShot(1200, self._sync_face_voice_loop)
+        QTimer.singleShot(2200, self._auto_publish_initial_pose_if_needed)
+
+    def _schedule_startup_audio_sync(self, *, delay_ms: int = 0) -> None:
+        if not self._startup_audio_sync_active:
+            return
+        if self._startup_audio_sync_attempts >= self._startup_audio_sync_max_attempts:
+            self._startup_audio_sync_active = False
+            return
+        QTimer.singleShot(max(0, int(delay_ms)), self._run_startup_audio_sync_once)
+
+    def _run_startup_audio_sync_once(self) -> None:
+        if not self._startup_audio_sync_active:
+            return
+        self._startup_audio_sync_attempts += 1
+        self._sync_remote_audio_preferences(publish_preferences=True)
+
+    def _start_ocr_warmup_if_available(self) -> None:
+        try:
+            from assistant_gui.engines.ocr_engine import OcrEngine
+        except Exception:
+            try:
+                from engines.ocr_engine import OcrEngine
+            except Exception:
+                return
+        OcrEngine.start_reader_warmup()
 
     def _restore_ui_preferences(self) -> None:
         theme = str(self._settings.value("ui/theme", "light"))
@@ -277,8 +556,8 @@ class OmniMateMain(QMainWindow):
         robot_speaker_volume = int(self._settings.value("voice/robot_speaker_volume", self._robot_speaker_volume))
         pc_local_voice_enabled = str(self._settings.value("voice/pc_local_voice_enabled", "true" if self._face_voice_loop_enabled else "false"))
         robot_voice_input_enabled = str(self._settings.value("voice/robot_voice_input_enabled", "true" if self._robot_voice_input_enabled else "false"))
-        self.apply_default_voice_backend(voice_backend)
-        self.apply_default_edge_voice(edge_voice)
+        self.apply_default_voice_backend(voice_backend, publish=False)
+        self.apply_default_edge_voice(edge_voice, publish=False)
         self.apply_wakeword_reply_only(wakeword_reply_only)
         if not self.is_microphone_available():
             pc_local_voice_enabled = "false"
@@ -290,9 +569,9 @@ class OmniMateMain(QMainWindow):
         )
         self.apply_robot_speaker_volume(robot_speaker_volume, publish=False)
 
-        width = int(self._settings.value("window/width", 1600))
-        height = int(self._settings.value("window/height", 560))
-        self.resize(width, height)
+        width = int(self._settings.value("window/width", 1920))
+        height = int(self._settings.value("window/height", 1080))
+        self.apply_window_size(width, height)
         self._pref_fullscreen = str(self._settings.value("window/fullscreen", "false")).lower() in {"1", "true", "yes"}
 
     def apply_theme(self, theme: str) -> None:
@@ -338,16 +617,30 @@ class OmniMateMain(QMainWindow):
             except Exception:
                 pass
 
-    def _on_pose_changed(self, x_m: float, y_m: float, source: str) -> None:
+    def _on_pose_changed(self, x_m: float, y_m: float, yaw_rad: float, source: str) -> None:
+        if str(source).strip() == "/amcl_pose":
+            self._localized_pose_received = True
         if hasattr(self, "home_page"):
             try:
-                self.home_page.update_robot_pose(x_m, y_m, source)
+                self.home_page.update_robot_pose(x_m, y_m, yaw_rad, source)
             except Exception:
                 pass
 
     def apply_window_size(self, width: int, height: int) -> None:
-        width = max(800, min(3840, int(width)))
-        height = max(360, min(2160, int(height)))
+        screen = self.screen()
+        if screen is None:
+            app = QApplication.instance()
+            if app is not None:
+                screen = app.primaryScreen()
+        max_w = 3840
+        max_h = 2160
+        if screen is not None:
+            geometry = screen.availableGeometry()
+            max_w = max(1024, geometry.width() - 24)
+            max_h = max(480, geometry.height() - 24)
+        width = max(960, min(max_w, int(width)))
+        min_balanced_height = max(540, min(max_h, int(width / 2.2)))
+        height = max(min_balanced_height, min(max_h, int(height)))
         self.resize(width, height)
         self._settings.setValue("window/width", width)
         self._settings.setValue("window/height", height)
@@ -373,7 +666,7 @@ class OmniMateMain(QMainWindow):
         self.shared_face_controller.start_timer(interval_ms)
         self._settings.setValue("runtime/face_fps", fps)
 
-    def apply_default_voice_backend(self, backend: str) -> None:
+    def apply_default_voice_backend(self, backend: str, *, publish: bool = True) -> tuple[bool, str]:
         mapping = {
             "자동": "auto",
             "Edge TTS": "edge_tts",
@@ -387,11 +680,58 @@ class OmniMateMain(QMainWindow):
         normalized = mapping.get(str(backend).strip(), "auto")
         self._default_voice_backend = normalized
         self._settings.setValue("voice/default_backend", normalized)
+        if not publish:
+            return True, f"기본 음성 엔진을 {normalized}로 저장했습니다."
+        return self.publish_robot_tts_config(force=True)
 
-    def apply_default_edge_voice(self, voice_name: str) -> None:
+    def apply_default_edge_voice(self, voice_name: str, *, publish: bool = True) -> tuple[bool, str]:
         voice = str(voice_name).strip() or "ko-KR-SunHiNeural"
         self._default_edge_voice = voice
         self._settings.setValue("voice/edge_voice", voice)
+        if not publish:
+            return True, f"기본 Edge 음성을 {voice}로 저장했습니다."
+        return self.publish_robot_tts_config(force=True)
+
+    @staticmethod
+    def _is_male_edge_voice(voice_name: str) -> bool:
+        voice = str(voice_name or "").strip()
+        return any(token in voice for token in ("InJoon", "BongJin", "GookMin", "Hyunsu", "Guy", "Keita"))
+
+    def build_robot_tts_config(self) -> dict[str, object]:
+        selected_backend = str(getattr(self, "_default_voice_backend", "auto")).strip().lower()
+        edge_voice = str(getattr(self, "_default_edge_voice", "ko-KR-SunHiNeural")).strip() or "ko-KR-SunHiNeural"
+        fallback_voice_name = "male1" if self._is_male_edge_voice(edge_voice) else "female1"
+
+        backend_mapping = {
+            "auto": "edge_tts",
+            "edge_tts": "edge_tts",
+            "speech_dispatcher": "speech_dispatcher",
+            "espeak_ng": "speech_dispatcher",
+        }
+        robot_backend = backend_mapping.get(selected_backend, "edge_tts")
+        voice_name = edge_voice if robot_backend == "edge_tts" else fallback_voice_name
+
+        return {
+            "tts_backend": robot_backend,
+            "voice_name": voice_name,
+            "language": "ko",
+            "fallback_voice_name": fallback_voice_name,
+        }
+
+    def publish_robot_tts_config(self, *, force: bool = True) -> tuple[bool, str]:
+        payload = json.dumps(self.build_robot_tts_config(), ensure_ascii=False)
+        now = time.monotonic()
+        if not force and payload == self._last_robot_tts_config_payload and (now - self._last_robot_tts_config_sent_at) < 10.0:
+            config = self.build_robot_tts_config()
+            return True, f"로봇 TTS 설정 유지: {config.get('tts_backend')} / {config.get('voice_name')}"
+
+        ok, message = self._publish_string_topic('/assistant/audio/tts_config', payload)
+        if not ok:
+            return ok, message
+        self._last_robot_tts_config_payload = payload
+        self._last_robot_tts_config_sent_at = now
+        config = self.build_robot_tts_config()
+        return True, f"로봇 TTS 설정 반영: {config.get('tts_backend')} / {config.get('voice_name')}"
 
     def apply_wakeword_reply_only(self, enabled) -> None:
         if isinstance(enabled, str):
@@ -406,6 +746,9 @@ class OmniMateMain(QMainWindow):
         else:
             self._face_voice_loop_enabled = bool(enabled)
         self._settings.setValue("voice/pc_local_voice_enabled", self._face_voice_loop_enabled)
+        if self._face_voice_loop_enabled and bool(getattr(self, "_robot_voice_input_enabled", False)):
+            # Keep a single wake/STT path active to avoid microphone contention.
+            self.apply_robot_voice_input_enabled(False, publish=True)
         if hasattr(self, "_global_wakeword_controller"):
             self._sync_face_voice_loop()
 
@@ -448,6 +791,12 @@ class OmniMateMain(QMainWindow):
             label = "활성" if self._person_greeting_enabled else "비활성"
             return True, f"사람 인사 로직 기본값을 {label}으로 저장했습니다."
         return self.publish_person_greeting_enabled(self._person_greeting_enabled)
+
+    def publish_confirmation_signal(self) -> tuple[bool, str]:
+        ok, message = self._publish_bool_topic('/assistant/confirmation', True)
+        if ok:
+            return True, 'ok'
+        return False, '전달 확인 구독자 없음 또는 ROS 연결 불일치로 확인 신호를 보내지 못했습니다.'
 
     def _load_tts_templates(self) -> None:
         loaded: dict[str, str] = {}
@@ -583,6 +932,31 @@ class OmniMateMain(QMainWindow):
     def _is_medication_add_command(text: str) -> bool:
         return bool(re.search(r"(복약|약).*(추가|등록)", str(text or "")))
 
+    @staticmethod
+    def _extract_delivery_target(command_text: str) -> str:
+        text = str(command_text or "").strip()
+        if not text:
+            return ""
+        delivery_keywords = r"(?:우편|배달|배송|전달)"
+        match = re.search(
+            rf"(?P<target>[가-힣A-Za-z0-9_ ]+?)(?:에|로|으로)\s*{delivery_keywords}",
+            text,
+        )
+        if not match:
+            return ""
+        return str(match.group("target") or "").strip()
+
+    def _handle_gui_delivery_request(self, command_text: str) -> tuple[bool, str, bool]:
+        target = self._extract_delivery_target(command_text)
+        if target:
+            return False, "", False
+
+        self.switch_page(7, manual=True)
+        if hasattr(self, "home_page"):
+            self.home_page.st_main.setText("우편 전달")
+            self.home_page.st_sub.setText("수취인을 스캔할 수 있도록 우편 화면을 열었습니다.")
+        return True, "우편 배달 요청을 받았습니다. 수취인을 스캔해주세요.", True
+
     def _is_always_local_voice_command(self, command_text: str) -> bool:
         scenario = self.classify_tts_scenario(command_text)
         if scenario in {
@@ -646,6 +1020,11 @@ class OmniMateMain(QMainWindow):
         if not text:
             return False, "빈 명령입니다.", False
 
+        if self.classify_tts_scenario(text) == "delivery_request":
+            handled, message, local = self._handle_gui_delivery_request(text)
+            if handled:
+                return handled, message, local
+
         if self._is_always_local_voice_command(text):
             return True, self.build_local_voice_response(text), True
 
@@ -654,17 +1033,13 @@ class OmniMateMain(QMainWindow):
             return True, self.build_local_voice_response(text), True
         return submitted, message, False
 
+    def prefers_robot_tts(self) -> bool:
+        return bool(getattr(self, "_remote_robot_audio_available", False))
+
     def speak_text(self, text: str, *, target: str = "pc") -> tuple[bool, str]:
-        if target == "robot":
-            return self.publish_tts_to_robot(text)
-        ok = self._speak_quick(text)
-        if ok:
-            return True, "ok"
-        selected = str(getattr(self, "_default_voice_backend", "auto"))
-        return False, (
-            "PC TTS 실행에 실패했습니다. "
-            f"(기본 음성 엔진: {selected}, edge-tts/spd-say/espeak-ng 설치/상태 확인 필요)"
-        )
+        # Topic delivery debugging mode: always use robot /assistant/speak path.
+        _ = target
+        return self.publish_tts_to_robot(text)
 
     def submit_command_text(self, command_text: str) -> tuple[bool, str]:
         text = str(command_text or "").strip()
@@ -672,16 +1047,145 @@ class OmniMateMain(QMainWindow):
             return False, "빈 명령입니다."
         return self._publish_string_topic("/assistant/command_text", text)
 
-    def send_nav_to_coordinate(self, x_m: float, y_m: float) -> tuple[bool, str]:
-        """지도 클릭 좌표 기반 로봇 이동 명령 발행 기능."""
-        msg_data = f"navigate:x={x_m:.3f},y={y_m:.3f}"
-        return self.submit_command_text(msg_data)
+    def is_goal_orientation_required(self) -> bool:
+        return bool(self._require_goal_orientation)
 
-    def send_nav_to_named_place(self, place_name: str) -> tuple[bool, str]:
+    def set_goal_orientation_required(self, enabled: bool) -> tuple[bool, str]:
+        self._require_goal_orientation = bool(enabled)
+        self._settings.setValue("navigation/require_goal_orientation", self._require_goal_orientation)
+        return self._publish_goal_orientation_requirement(self._require_goal_orientation)
+
+    def cancel_active_navigation(self) -> tuple[bool, str]:
+        messages: list[str] = []
+
+        command_client = self._get_ros_command_client()
+        if command_client is not None:
+            direct_ok, direct_message = command_client.cancel_active_guide_goals()
+            if direct_ok:
+                if direct_message:
+                    messages.append(direct_message)
+                return True, " | ".join(messages) if messages else "직접 안내 goal 취소를 요청했습니다."
+            if direct_message:
+                messages.append(direct_message)
+
+        submit_ok, submit_message = self.submit_command_text("중지해줘")
+        if submit_message:
+            messages.append(submit_message)
+
+        if submit_ok:
+            return True, " | ".join(messages)
+        return False, " | ".join(messages) if messages else "안내 취소 요청을 전송하지 못했습니다."
+
+    def _publish_goal_orientation_requirement(self, enabled: bool) -> tuple[bool, str]:
+        command_client = self._get_ros_command_client()
+        if command_client is None:
+            return False, "ROS direct navigation client를 초기화하지 못했습니다."
+        return command_client.publish_bool("/assistant/navigation/require_goal_orientation", bool(enabled))
+
+    def send_nav_to_coordinate(self, x_m: float, y_m: float) -> tuple[bool, str]:
+        """지도 클릭 좌표를 직접 navigation target 문자열로 보내는 기능."""
+        coordinate_target = f"navigate:x={float(x_m):.3f},y={float(y_m):.3f},frame=map"
+        ok, message = self.start_direct_navigation_to_named_place(
+            coordinate_target,
+            announcement_text="안내를 시작합니다.",
+            require_orientation=self._require_goal_orientation,
+        )
+        return (ok, message if not ok else "ok")
+
+    def _build_named_place_navigation_announcement(self, place_name: str) -> str:
+        name = str(place_name or "").strip()
+        if not name:
+            return "안내를 시작합니다."
+        return f"{name}로 안내를 시작합니다."
+
+    def send_nav_to_named_place(self, place_name: str, *, announcement_text: str | None = None) -> tuple[bool, str]:
         name = str(place_name or "").strip()
         if not name:
             return False, "장소 이름이 비어 있습니다."
+        spoken_text = str(announcement_text).strip() if announcement_text is not None else self._build_named_place_navigation_announcement(name)
+        ok, message = self.start_direct_navigation_to_named_place(
+            name,
+            announcement_text=spoken_text,
+            require_orientation=self._require_goal_orientation,
+        )
+        if ok:
+            return True, "ok"
+        if spoken_text:
+            self.publish_tts_to_robot(spoken_text)
         return self.submit_command_text(f"{name}으로 안내해줘")
+
+    def _get_ros_command_client(self) -> GuiRosCommandClient | None:
+        if self._ros_command_client is not None:
+            return self._ros_command_client
+        try:
+            self._ros_command_client = GuiRosCommandClient()
+        except Exception:
+            self._ros_command_client = None
+        return self._ros_command_client
+
+    def start_direct_navigation_to_named_place(
+        self,
+        place_name: str,
+        *,
+        announcement_text: str = "안내를 시작합니다.",
+        delay_ms: int = 350,
+        require_orientation: bool | None = None,
+    ) -> tuple[bool, str]:
+        name = str(place_name or "").strip()
+        if not name:
+            return False, "장소 이름이 비어 있습니다."
+
+        command_client = self._get_ros_command_client()
+        if command_client is None:
+            return False, "ROS direct navigation client를 초기화하지 못했습니다."
+
+        orientation_required = self._require_goal_orientation if require_orientation is None else bool(require_orientation)
+        publish_ok, publish_message = self._publish_goal_orientation_requirement(orientation_required)
+        if not publish_ok:
+            print(f"[OmniMateMain] navigation orientation mode publish failed: {publish_message}")
+
+        effective_delay_ms = max(0, int(delay_ms))
+        if announcement_text.strip():
+            speak_ok, speak_message = self.publish_tts_to_robot(announcement_text)
+            if not speak_ok:
+                print(f"[OmniMateMain] navigation announcement publish failed: {speak_message}")
+            effective_delay_ms = max(effective_delay_ms, self._estimate_navigation_tts_wait_ms(announcement_text))
+
+        def _dispatch_goal() -> None:
+            ok, message = command_client.send_guide_goal(name)
+            if not ok:
+                print(f"[OmniMateMain] direct navigation failed: {message}")
+
+        QTimer.singleShot(effective_delay_ms, _dispatch_goal)
+        return True, "ok"
+
+    @staticmethod
+    def _estimate_navigation_tts_wait_ms(announcement_text: str) -> int:
+        # If explicitly configured, honor fixed delay for deterministic demos.
+        configured = os.getenv("ASSISTANT_NAV_TTS_WAIT_MS", "").strip()
+        if configured:
+            try:
+                return max(0, int(configured))
+            except ValueError:
+                pass
+
+        text = str(announcement_text or "").strip()
+        if not text:
+            return 350
+
+        # Rough Korean TTS estimate: base latency + per-character speech duration.
+        estimated = 900 + (len(text) * 110)
+        return max(1400, min(6500, estimated))
+
+    @staticmethod
+    def get_navigation_dwell_ms() -> int:
+        configured = os.getenv("ASSISTANT_NAV_DWELL_MS", "").strip()
+        if configured:
+            try:
+                return max(0, int(configured))
+            except ValueError:
+                pass
+        return 1800
 
     def _load_named_place_document(self) -> dict:
         config_path = ROBOT_NAMED_PLACE_CONFIG
@@ -689,6 +1193,72 @@ class OmniMateMain(QMainWindow):
             return {"medication_targets": [], "named_places": {}}
         loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         return loaded if isinstance(loaded, dict) else {"medication_targets": [], "named_places": {}}
+
+    def _mark_named_place_target_on_home_map(self, place_name: str) -> float | None:
+        if not hasattr(self, 'home_page') or not hasattr(self.home_page, 'map_view'):
+            return None
+        place = self.get_named_place_lookup().get(str(place_name or '').strip())
+        if not isinstance(place, dict):
+            return None
+        try:
+            x_m = float(place.get('x', 0.0))
+            y_m = float(place.get('y', 0.0))
+        except (TypeError, ValueError):
+            return None
+
+        self.home_page.map_view.set_nav_target_preview(x_m, y_m)
+        self.home_page.map_view.draw_path_to_target(x_m, y_m)
+        try:
+            self.home_page._active_navigation_label = str(place_name or '').strip()
+        except Exception:
+            pass
+        return self.home_page.map_view.get_path_length_m()
+
+    def _write_named_place_document(self, document: dict) -> None:
+        config_path = ROBOT_NAMED_PLACE_CONFIG
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            yaml.safe_dump(document, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+    def _upsert_temporary_navigation_place(self, x_m: float, y_m: float) -> tuple[bool, str]:
+        document = self._load_named_place_document()
+        named_places = document.get("named_places", {})
+        if not isinstance(named_places, dict):
+            named_places = {}
+
+        place_name = "__tmp_click_target__"
+        named_places[place_name] = {
+            "source": "temporary",
+            "frame_id": "map",
+            "x": round(float(x_m), 3),
+            "y": round(float(y_m), 3),
+            "yaw": 0.0,
+            "aliases": [place_name],
+            "ocr_enabled": False,
+        }
+        document["named_places"] = named_places
+        self._write_named_place_document(document)
+        self._temporary_navigation_place_name = place_name
+        return True, place_name
+
+    def _cleanup_temporary_navigation_place(self) -> None:
+        place_name = str(getattr(self, "_temporary_navigation_place_name", "")).strip()
+        if not place_name:
+            return
+
+        document = self._load_named_place_document()
+        named_places = document.get("named_places", {})
+        if not isinstance(named_places, dict):
+            self._temporary_navigation_place_name = ""
+            return
+
+        if place_name in named_places:
+            named_places.pop(place_name, None)
+            document["named_places"] = named_places
+            self._write_named_place_document(document)
+        self._temporary_navigation_place_name = ""
 
     @staticmethod
     def _yaw_from_metadata(metadata: dict) -> float:
@@ -735,9 +1305,17 @@ class OmniMateMain(QMainWindow):
         return {str(item.get("name", "")): item for item in self.get_named_place_items() if str(item.get("name", "")).strip()}
 
     def get_quick_destination_names(self, *, limit: int = 4) -> list[str]:
-        preferred = [item["name"] for item in self.get_named_place_items() if item.get("name") and item.get("name") != "home"]
+        preferred = [
+            item["name"]
+            for item in self.get_named_place_items()
+            if item.get("name") and item.get("name") != "home" and item.get("source") != "temporary"
+        ]
         if not preferred:
-            preferred = [item["name"] for item in self.get_named_place_items() if item.get("name")]
+            preferred = [
+                item["name"]
+                for item in self.get_named_place_items()
+                if item.get("name") and item.get("source") != "temporary"
+            ]
         return [str(name) for name in preferred[: max(1, int(limit))]]
 
     def save_named_place_items(self, items: list[dict[str, object]]) -> tuple[bool, str]:
@@ -780,18 +1358,11 @@ class OmniMateMain(QMainWindow):
         if not isinstance(medication_targets, list):
             medication_targets = []
 
-        config_path = ROBOT_NAMED_PLACE_CONFIG
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            yaml.safe_dump(
-                {
-                    "medication_targets": medication_targets,
-                    "named_places": named_places,
-                },
-                allow_unicode=True,
-                sort_keys=False,
-            ),
-            encoding="utf-8",
+        self._write_named_place_document(
+            {
+                "medication_targets": medication_targets,
+                "named_places": named_places,
+            }
         )
 
         if hasattr(self, "home_page") and self.home_page is not None and hasattr(self.home_page, "refresh_quick_destinations"):
@@ -799,66 +1370,77 @@ class OmniMateMain(QMainWindow):
         return True, f"장소 {len(named_places)}개를 저장했습니다."
 
     def publish_tts_to_robot(self, text: str) -> tuple[bool, str]:
-        if not shutil.which("ros2"):
-            return False, "ros2 CLI를 찾을 수 없습니다."
+        self.publish_robot_tts_config(force=False)
 
-        safe_text = text.replace("\\", "\\\\").replace('"', '\\"')
-        msg_arg = f'{{data: "{safe_text}"}}'
-        cmd = [
-            "ros2", "topic", "pub", "--once",
-            "-w", "1", "--max-wait-time-secs", "1",
-            "/assistant/speak", "std_msgs/msg/String", msg_arg,
-        ]
+        command_client = self._get_ros_command_client()
+        if command_client is not None:
+            try:
+                ok, message = command_client.publish_string("/assistant/speak", text, timeout_sec=0.45)
+                if ok:
+                    return True, "ok"
+                if self._is_subscriber_timeout(message):
+                    cli_ok, cli_message = self._publish_string_via_cli("/assistant/speak", text)
+                    if cli_ok:
+                        return True, "ok"
+                    return False, (
+                        "구독자 없음: 로봇 tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 불일치"
+                        f" (CLI 재시도 실패: {cli_message})"
+                    )
+                return False, message
+            except Exception as exc:
+                message = str(exc)
+                if "Connection refused" in message or "연결이 거부" in message:
+                    return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인(ROS_DOMAIN_ID=142) 설정을 확인하세요."
+                return False, message
 
-        ros_env = self._build_ros_cli_env()
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=ros_env)
-            if result.returncode != 0:
-                err = (result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패")
-                if "Timed out waiting for subscribers" in err:
-                    err = "구독자 없음: 로봇 tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 불일치"
-                elif "Connection refused" in err or "연결이 거부" in err:
-                    err = "로봇 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인(ROS_DOMAIN_ID=142) 설정을 확인하세요."
-                return False, err
+        ok, message = self._publish_string_via_cli("/assistant/speak", text)
+        if ok:
             return True, "ok"
-        except Exception as exc:
-            message = str(exc)
-            if "Connection refused" in message or "연결이 거부" in message:
-                return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인(ROS_DOMAIN_ID=142) 설정을 확인하세요."
-            return False, message
+        if self._is_subscriber_timeout(message):
+            return False, "구독자 없음: 로봇 tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 불일치"
+        if "Connection refused" in message or "연결이 거부" in message:
+            return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인(ROS_DOMAIN_ID=142) 설정을 확인하세요."
+        return False, message
 
     def _publish_string_topic(self, topic_name: str, text: str) -> tuple[bool, str]:
-        if not shutil.which("ros2"):
-            return False, "ros2 CLI를 찾을 수 없습니다."
-
-        payload = json.dumps({"data": text}, ensure_ascii=False)
-        cmd = [
-            "ros2", "topic", "pub", "--once",
-            "-w", "1", "--max-wait-time-secs", "1",
-            topic_name, "std_msgs/msg/String", payload,
-        ]
-
-        ros_env = self._build_ros_cli_env()
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=ros_env)
-            if result.returncode != 0:
-                err = result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패"
-                if "Timed out waiting for subscribers" in err:
+        command_client = self._get_ros_command_client()
+        if command_client is not None:
+            try:
+                ok, message = command_client.publish_string(topic_name, text, timeout_sec=0.45)
+                if ok:
+                    return True, "ok"
+                if self._is_subscriber_timeout(message):
+                    cli_ok, cli_message = self._publish_string_via_cli(topic_name, text)
+                    if cli_ok:
+                        return True, "ok"
                     err = (
                         "명령 구독자 없음: ROS 노드가 아직 안 떠 있거나 "
                         "orchestrator_node/intent_parser_node 미실행, 또는 ROS_DOMAIN_ID/RMW 설정이 다릅니다."
                     )
-                elif "Connection refused" in err or "연결이 거부" in err:
-                    err = "ROS 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인 설정을 확인하세요."
-                return False, err
+                    if topic_name == "/assistant/audio/tts_config":
+                        err = "로봇 오디오 구독자 없음: tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 설정 불일치"
+                    return False, f"{err} (CLI 재시도 실패: {cli_message})"
+                return False, message
+            except Exception as exc:
+                message = str(exc)
+                if "Connection refused" in message or "연결이 거부" in message:
+                    return False, "ROS 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인 설정을 확인하세요."
+                return False, message
+
+        ok, message = self._publish_string_via_cli(topic_name, text)
+        if ok:
             return True, "ok"
-        except Exception as exc:
-            message = str(exc)
-            if "Connection refused" in message or "연결이 거부" in message:
-                return False, "ROS 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인 설정을 확인하세요."
-            return False, message
+        if self._is_subscriber_timeout(message):
+            err = (
+                "명령 구독자 없음: ROS 노드가 아직 안 떠 있거나 "
+                "orchestrator_node/intent_parser_node 미실행, 또는 ROS_DOMAIN_ID/RMW 설정이 다릅니다."
+            )
+            if topic_name == "/assistant/audio/tts_config":
+                err = "로봇 오디오 구독자 없음: tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 설정 불일치"
+            return False, err
+        if "Connection refused" in message or "연결이 거부" in message:
+            return False, "ROS 연결이 거부되었습니다. 로봇측 ROS2 노드/네트워크/도메인 설정을 확인하세요."
+        return False, message
 
     def publish_robot_speaker_volume(self, volume: int) -> tuple[bool, str]:
         return self._publish_int_topic('/assistant/audio/set_volume', volume)
@@ -893,67 +1475,169 @@ class OmniMateMain(QMainWindow):
         return self.publish_person_greeting_enabled(bool(self._person_greeting_enabled))
 
     def _publish_int_topic(self, topic_name: str, value: int) -> tuple[bool, str]:
+        command_client = self._get_ros_command_client()
+        if command_client is not None:
+            try:
+                ok, message = command_client.publish_int(topic_name, value, timeout_sec=0.45)
+                if ok:
+                    return True, f"로봇 스피커 볼륨을 {int(value)}%로 적용했습니다."
+                if self._is_subscriber_timeout(message):
+                    cli_ok, cli_message = self._publish_int_via_cli(topic_name, int(value))
+                    if cli_ok:
+                        return True, f"로봇 스피커 볼륨을 {int(value)}%로 적용했습니다."
+                    return False, (
+                        "로봇 오디오 구독자 없음: tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 설정 불일치"
+                        f" (CLI 재시도 실패: {cli_message})"
+                    )
+                return False, message
+            except Exception as exc:
+                message = str(exc)
+                if "Connection refused" in message or "연결이 거부" in message:
+                    return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+                return False, message
+
+        ok, message = self._publish_int_via_cli(topic_name, int(value))
+        if ok:
+            return True, f"로봇 스피커 볼륨을 {int(value)}%로 적용했습니다."
+        if self._is_subscriber_timeout(message):
+            return False, "로봇 오디오 구독자 없음: tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 설정 불일치"
+        if "Connection refused" in message or "연결이 거부" in message:
+            return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+        return False, message
+
+    def _publish_bool_topic(self, topic_name: str, value: bool) -> tuple[bool, str]:
+        command_client = self._get_ros_command_client()
+        if command_client is not None:
+            try:
+                ok, message = command_client.publish_bool(topic_name, value, timeout_sec=0.45)
+                if ok:
+                    return True, "ok"
+                if self._is_subscriber_timeout(message):
+                    cli_ok, cli_message = self._publish_bool_via_cli(topic_name, bool(value))
+                    if cli_ok:
+                        return True, "ok"
+                    return False, (
+                        "로봇 오디오 제어 구독자 없음: 로봇 오디오 노드 미실행 또는 ROS 설정 불일치"
+                        f" (CLI 재시도 실패: {cli_message})"
+                    )
+                return False, message
+            except Exception as exc:
+                message = str(exc)
+                if "Connection refused" in message or "연결이 거부" in message:
+                    return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+                return False, message
+
+        ok, message = self._publish_bool_via_cli(topic_name, bool(value))
+        if ok:
+            return True, "ok"
+        if self._is_subscriber_timeout(message):
+            return False, "로봇 오디오 제어 구독자 없음: 로봇 오디오 노드 미실행 또는 ROS 설정 불일치"
+        if "Connection refused" in message or "연결이 거부" in message:
+            return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
+        return False, message
+
+    @staticmethod
+    def _is_subscriber_timeout(message: str) -> bool:
+        return "Timed out waiting for subscribers" in str(message or "")
+
+    def _publish_string_via_cli(self, topic_name: str, text: str) -> tuple[bool, str]:
         if not shutil.which("ros2"):
             return False, "ros2 CLI를 찾을 수 없습니다."
+        payload = json.dumps({"data": str(text)}, ensure_ascii=False)
+        cmd = [
+            "ros2", "topic", "pub", "--once",
+            "-w", "1",
+            str(topic_name), "std_msgs/msg/String", payload,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=2, env=self._build_ros_cli_env())
+            if result.returncode != 0:
+                return False, (result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패")
+            return True, "ok"
+        except Exception as exc:
+            return False, str(exc)
 
+    def _publish_int_via_cli(self, topic_name: str, value: int) -> tuple[bool, str]:
+        if not shutil.which("ros2"):
+            return False, "ros2 CLI를 찾을 수 없습니다."
         payload = json.dumps({"data": int(value)}, ensure_ascii=False)
         cmd = [
             "ros2", "topic", "pub", "--once",
-            "-w", "1", "--max-wait-time-secs", "1",
-            topic_name, "std_msgs/msg/Int32", payload,
+            "-w", "1",
+            str(topic_name), "std_msgs/msg/Int32", payload,
         ]
-
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=self._build_ros_cli_env())
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=2, env=self._build_ros_cli_env())
             if result.returncode != 0:
-                err = result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패"
-                if "Timed out waiting for subscribers" in err:
-                    err = "로봇 오디오 구독자 없음: tts_node 미실행 또는 ROS_DOMAIN_ID/RMW 설정 불일치"
-                elif "Connection refused" in err or "연결이 거부" in err:
-                    err = "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
-                return False, err
-            return True, f"로봇 스피커 볼륨을 {int(value)}%로 적용했습니다."
+                return False, (result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패")
+            return True, "ok"
         except Exception as exc:
-            message = str(exc)
-            if "Connection refused" in message or "연결이 거부" in message:
-                return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
-            return False, message
+            return False, str(exc)
 
-    def _publish_bool_topic(self, topic_name: str, value: bool) -> tuple[bool, str]:
+    def _publish_bool_via_cli(self, topic_name: str, value: bool) -> tuple[bool, str]:
         if not shutil.which("ros2"):
             return False, "ros2 CLI를 찾을 수 없습니다."
-
         payload = json.dumps({"data": bool(value)}, ensure_ascii=False)
         cmd = [
             "ros2", "topic", "pub", "--once",
-            "-w", "1", "--max-wait-time-secs", "1",
-            topic_name, "std_msgs/msg/Bool", payload,
+            "-w", "1",
+            str(topic_name), "std_msgs/msg/Bool", payload,
         ]
-
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=6, env=self._build_ros_cli_env())
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=2, env=self._build_ros_cli_env())
             if result.returncode != 0:
-                err = result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패"
-                if "Timed out waiting for subscribers" in err:
-                    err = "로봇 오디오 제어 구독자 없음: 로봇 오디오 노드 미실행 또는 ROS 설정 불일치"
-                elif "Connection refused" in err or "연결이 거부" in err:
-                    err = "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
-                return False, err
+                return False, (result.stderr.strip() or result.stdout.strip() or "ros2 topic pub 실패")
             return True, "ok"
         except Exception as exc:
-            message = str(exc)
-            if "Connection refused" in message or "연결이 거부" in message:
-                return False, "로봇 연결이 거부되었습니다. 로봇측 ROS2 오디오 노드/네트워크/도메인 설정을 확인하세요."
-            return False, message
+            return False, str(exc)
 
-    def _sync_remote_audio_preferences(self) -> None:
-        try:
-            if not self._query_remote_bool_topic('/assistant/audio/robot/input_available'):
-                self.apply_robot_voice_input_enabled(False, publish=False)
-            self.publish_robot_voice_input_enabled(bool(self._robot_voice_input_enabled))
-            self.publish_person_greeting_enabled(bool(self._person_greeting_enabled))
-        except Exception:
-            pass
+    def _sync_remote_audio_preferences(self, *, publish_preferences: bool = True) -> None:
+        if self._remote_audio_sync_inflight:
+            return
+
+        self._remote_audio_sync_inflight = True
+        requested_robot_voice_input = bool(self._robot_voice_input_enabled)
+        requested_person_greeting = bool(self._person_greeting_enabled)
+
+        def _worker() -> None:
+            remote_input_available = False
+            remote_tts_available = False
+            apply_ok = not publish_preferences
+            try:
+                remote_input_available = self._query_remote_bool_topic('/assistant/audio/robot/input_available')
+                remote_tts_available = (
+                    self._query_topic_has_subscriber('/assistant/speak')
+                    or self._query_topic_has_subscriber('/assistant/audio/tts_config')
+                )
+                if publish_preferences:
+                    effective_robot_voice_input = requested_robot_voice_input and remote_input_available
+                    ok_voice, _ = self.publish_robot_voice_input_enabled(effective_robot_voice_input)
+                    ok_greeting, _ = self.publish_person_greeting_enabled(requested_person_greeting)
+                    ok_tts, _ = self.publish_robot_tts_config(force=True)
+                    apply_ok = bool(ok_voice and ok_greeting and ok_tts)
+            except Exception:
+                pass
+            finally:
+                self._last_remote_audio_apply_ok = apply_ok
+                self.remote_audio_sync_finished.emit(remote_input_available, remote_tts_available)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_remote_audio_sync_finished(self, remote_input_available: bool, remote_tts_available: bool) -> None:
+        self._remote_audio_sync_inflight = False
+        self._remote_robot_audio_available = bool(remote_tts_available)
+        if not remote_input_available:
+            self.apply_robot_voice_input_enabled(False, publish=False)
+        if self._startup_audio_sync_active:
+            startup_sync_done = bool(
+                remote_input_available
+                and remote_tts_available
+                and self._last_remote_audio_apply_ok
+            )
+            if startup_sync_done:
+                self._startup_audio_sync_active = False
+            else:
+                self._schedule_startup_audio_sync(delay_ms=1800)
 
     def _query_remote_bool_topic(self, topic_name: str) -> bool:
         if not shutil.which("ros2"):
@@ -968,13 +1652,40 @@ class OmniMateMain(QMainWindow):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=4,
+                timeout=1.5,
                 env=self._build_ros_cli_env(),
             )
             if result.returncode != 0:
                 return False
             output = (result.stdout or "").lower()
             return "data: true" in output
+        except Exception:
+            return False
+
+    def _query_topic_has_subscriber(self, topic_name: str) -> bool:
+        if not shutil.which("ros2"):
+            return False
+
+        cmd = ["ros2", "topic", "info", topic_name]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+                env=self._build_ros_cli_env(),
+            )
+            if result.returncode != 0:
+                return False
+            output = (result.stdout or "").lower()
+            for line in output.splitlines():
+                normalized = line.strip()
+                if normalized.startswith('subscription count:'):
+                    try:
+                        return int(normalized.split(':', 1)[1].strip()) > 0
+                    except ValueError:
+                        return False
+            return False
         except Exception:
             return False
 
@@ -993,6 +1704,52 @@ class OmniMateMain(QMainWindow):
         if robot_peer_ip:
             ros_env["ROS_STATIC_PEERS"] = robot_peer_ip
         return ros_env
+
+    def _resolve_initial_pose(self) -> tuple[float, float, float, str]:
+        home = self.get_named_place_lookup().get("home", {})
+        frame_id = str(home.get("frame_id", "map")).strip() or "map"
+        try:
+            x_value = float(home.get("x", 0.0))
+            y_value = float(home.get("y", 0.0))
+            yaw_value = float(home.get("yaw", math.radians(64.0)))
+        except (TypeError, ValueError):
+            x_value = 0.0
+            y_value = 0.0
+            yaw_value = math.radians(64.0)
+
+        if not home:
+            x_value = 0.0
+            y_value = 0.0
+            yaw_value = math.radians(64.0)
+        return x_value, y_value, yaw_value, frame_id
+
+    def _auto_publish_initial_pose_if_needed(self) -> None:
+        if self._localized_pose_received:
+            self._initial_pose_published = True
+            return
+        if self._initial_pose_attempts >= 4:
+            return
+        if str(os.getenv("ASSISTANT_AUTO_INITIAL_POSE", "1")).strip().lower() not in {"1", "true", "yes", "on"}:
+            return
+        command_client = self._get_ros_command_client()
+        if command_client is None:
+            return
+        if not command_client.is_initial_pose_receiver_ready():
+            self._initial_pose_wait_checks += 1
+            if self._initial_pose_wait_checks <= 30:
+                QTimer.singleShot(1000, self._auto_publish_initial_pose_if_needed)
+            return
+        x_value, y_value, yaw_value, frame_id = self._resolve_initial_pose()
+        try:
+            command_client.publish_initial_pose(x=x_value, y=y_value, yaw=yaw_value, frame_id=frame_id)
+            self._initial_pose_attempts += 1
+            self._initial_pose_wait_checks = 0
+            if self._localized_pose_received:
+                self._initial_pose_published = True
+                return
+            QTimer.singleShot(1500, self._auto_publish_initial_pose_if_needed)
+        except Exception as exc:
+            print(f"[OmniMateMain] initial pose publish failed: {exc}")
 
     def switch_page(self, index, *, manual: bool = False):
         """페이지 전환 및 헤더 표시 여부 결정"""
@@ -1357,6 +2114,48 @@ class OmniMateMain(QMainWindow):
         self._ros_bridge.status_changed.connect(self._on_ros_status_changed)
         self._ros_bridge.start()
 
+    def _start_data_sync_bridge(self) -> None:
+        self._data_sync_bridge = DataSyncBridge(parent=self)
+        self._data_sync_bridge.snapshot_requested.connect(self._on_data_sync_request)
+        self._data_sync_bridge.start()
+        QTimer.singleShot(1200, lambda: self._publish_runtime_data_snapshot("startup"))
+
+    def _collect_runtime_data_snapshot(self) -> dict[str, object]:
+        schedules = dict(getattr(self.schedule_mgr, "schedules", {}) or {})
+        alarms = list(getattr(self.alarm_mgr, "alarms", []) or [])
+
+        medications: dict[str, object] = {"last_run_date": "", "meds": []}
+        if hasattr(self, "medication_page") and hasattr(self.medication_page, "med_mgr"):
+            med_mgr = self.medication_page.med_mgr
+            medications = {
+                "last_run_date": str(getattr(med_mgr, "last_run_date", "") or ""),
+                "meds": list(getattr(med_mgr, "meds", []) or []),
+            }
+
+        self._data_sync_version += 1
+        return {
+            "source": "pc_gui",
+            "version": self._data_sync_version,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "schedules": schedules,
+            "alarms": alarms,
+            "medications": medications,
+        }
+
+    def _publish_runtime_data_snapshot(self, reason: str) -> None:
+        if self._data_sync_bridge is None:
+            return
+        payload = self._collect_runtime_data_snapshot()
+        payload["reason"] = str(reason or "")
+        self._data_sync_bridge.publish_snapshot(payload)
+
+    def _on_runtime_data_saved(self, source: str) -> None:
+        self._publish_runtime_data_snapshot(f"save:{source}")
+
+    def _on_data_sync_request(self, request_id: str) -> None:
+        request = str(request_id or "").strip()
+        self._publish_runtime_data_snapshot(f"request:{request or 'unknown'}")
+
     def _on_ros_state_changed(self, state: str) -> None:
         """ROS2 AssistantState 변경 수신 시 GUI 업데이트."""
         # TODO(ros): state 토픽에 listening 시작/종료 구간 정보가 분리되면
@@ -1387,11 +2186,45 @@ class OmniMateMain(QMainWindow):
         # SLEEPING 상태 기반 FacePage 자동 전환 기능.
         if state == 'SLEEPING':
             self.switch_page(0)
+        elif state == 'WAITING_CONFIRMATION' and hasattr(self, 'gesture_page'):
+            target, kind = self._resolve_confirmation_context()
+            if hasattr(self.gesture_page, 'set_confirmation_context'):
+                self.gesture_page.set_confirmation_context(target, kind)
+            else:
+                self.gesture_page.set_target(target)
+            self.switch_page(12, manual=True)
+        elif state == 'IDLE' and self._mail_returning_home:
+            if hasattr(self, 'home_page'):
+                self.home_page.st_main.setText("복귀 완료")
+                self.home_page.st_sub.setText("대기 위치로 복귀했습니다.")
+            self.publish_tts_to_robot("대기 위치로 복귀했습니다.")
+            self.switch_page(1, manual=True)
+            self._mail_returning_home = False
+            self._mail_confirmation_pending = False
+            self._pending_mail_delivery_target = ""
+        elif state == 'IDLE' and getattr(self, '_pending_mail_delivery_target', '') and not self._mail_confirmation_pending:
+            target = str(getattr(self, '_pending_mail_delivery_target', '')).strip()
+            if target and hasattr(self, 'home_page'):
+                self.home_page.st_main.setText(f"{target} 배송 완료")
+                self.home_page.st_sub.setText(f"{target}에 우편 배달을 완료했습니다.")
+            elif hasattr(self, 'home_page'):
+                self.home_page.st_main.setText("배송 완료")
+                self.home_page.st_sub.setText("우편 배달이 완료되었습니다.")
+            self.switch_page(1, manual=True)
+            self._pending_mail_delivery_target = ""
+
+        if state in {'IDLE', 'ERROR'}:
+            self._cleanup_temporary_navigation_place()
 
     def _on_ros_status_changed(self, status: str) -> None:
         """status_text 로그 수신 (필요 시 팁소 또는 상태 표시에 사용할 수 있다)."""
+        status_text = str(status or '').strip()
+        if not status_text:
+            return
+        self._last_runtime_status_text = status_text
+        self._maybe_show_confirmation_page_from_status(status_text)
         if hasattr(self, 'shared_face_controller'):
-            status_upper = status.strip().upper()
+            status_upper = status_text.upper()
             try:
                 if status_upper.startswith('STATE:LISTENING'):
                     self.shared_face_controller.on_processing_finished()
@@ -1409,16 +2242,254 @@ class OmniMateMain(QMainWindow):
                     self.shared_face_controller.on_tts_finished()
             except Exception:
                 pass
+
+        if not status_text.upper().startswith('STATE:'):
+            self._apply_runtime_status_text(status_text)
+
+    def _maybe_show_confirmation_page_from_status(self, status_text: str) -> None:
+        text = str(status_text or '').strip()
+        if not text or not hasattr(self, 'gesture_page'):
+            return
+
+        waiting_keywords = (
+            '복약 확인 응답을 기다리는 중입니다',
+            '전달 확인 응답을 기다리는 중입니다',
+            '알림 확인 응답을 기다리는 중입니다',
+            '확인 응답을 기다리는 중입니다',
+            '확인 대기',
+        )
+        if not any(keyword in text for keyword in waiting_keywords):
+            return
+
+        kind = 'generic'
+        if '복약 확인' in text:
+            kind = 'medication'
+        elif '전달 확인' in text or '배송 확인' in text:
+            kind = 'delivery'
+        elif '알림 확인' in text or '알람 확인' in text:
+            kind = 'alarm'
+
+        target = ''
+        match = re.search(r'대상:\s*([^·]+)', text)
+        if match:
+            target = match.group(1).strip()
+        if not target:
+            target = str(getattr(self, '_pending_mail_delivery_target', '')).strip() or '현재 대상'
+
+        current_index = self.stacked_widget.currentIndex() if hasattr(self, 'stacked_widget') else -1
+        if current_index == 12 and getattr(self.gesture_page, 'is_returning', False):
+            return
+
+        if hasattr(self.gesture_page, 'set_confirmation_context'):
+            self.gesture_page.set_confirmation_context(target, kind)
+        else:
+            self.gesture_page.set_target(target)
+        self.switch_page(12, manual=True)
+
+    def _resolve_confirmation_context(self) -> tuple[str, str]:
+        text = str(getattr(self, '_last_runtime_status_text', '')).strip()
+        target = str(getattr(self, '_pending_mail_delivery_target', '')).strip()
+
+        kind = 'generic'
+        if self._mail_confirmation_pending and target:
+            kind = 'delivery'
+        elif '복약 확인' in text:
+            kind = 'medication'
+        elif '전달 확인' in text or '배송 확인' in text:
+            kind = 'delivery'
+        elif '알림 확인' in text or '알람 확인' in text:
+            kind = 'alarm'
+
+        if not target and text:
+            match = re.search(r'대상:\s*([^·]+)', text)
+            if match:
+                target = match.group(1).strip()
+
+        if not target:
+            target = '현재 대상'
+
+        return target, kind
+
+    def _apply_runtime_status_text(self, status_text: str) -> None:
+        text = str(status_text or '').strip()
+        if not text:
+            return
+
+        ignored_prefixes = (
+            '로봇 TTS 설정 적용:',
+            '음성 응답 처리 시작:',
+            '음성 응답 출력 중:',
+            '로봇 스피커 볼륨',
+        )
+        if any(text.startswith(prefix) for prefix in ignored_prefixes):
+            return
+
+        if hasattr(self, 'home_page') and self.home_page is not None:
+            if hasattr(self.home_page, 'has_navigation_activity') and self.home_page.has_navigation_activity():
+                # Keep navigation/queue context visible while movement is active.
+                return
+            self.home_page.st_main.setText(self._headline_from_runtime_status(text))
+            self.home_page.st_sub.setText(text)
+
+    @staticmethod
+    def _build_alarm_arrival_text(meta: dict[str, object]) -> str:
+        content = str(meta.get('alarm_content') or meta.get('content') or '').strip()
+        hour = meta.get('hour')
+        minute = meta.get('minute')
+        try:
+            if hour is not None and minute is not None:
+                return f"{int(hour)}시 {int(minute):02d}분, {content or '설정된 알람 시간입니다.'}"
+        except (TypeError, ValueError):
+            pass
+        if content:
+            return f"알람 내용은 {content} 입니다."
+        return '설정된 알람 시간입니다.'
+
+    @staticmethod
+    def _build_medication_arrival_text(meta: dict[str, object], fallback_label: str) -> str:
+        person_name = str(meta.get('person_name') or meta.get('target_name') or '').strip()
+        if not person_name:
+            person_name = str(fallback_label or '').strip()
+        if not person_name:
+            return '약 드실 시간입니다.'
+        if person_name.endswith('님'):
+            return f'{person_name} 약 드실 시간입니다.'
+        return f'{person_name}님 약 드실 시간입니다.'
+
+    def on_navigation_arrived(self, current_label: str, meta: dict[str, object] | None = None, next_label: str = '') -> None:
+        label = str(current_label or '').strip() or '현재 목표'
+        payload = dict(meta or {})
+        kind = str(payload.get('kind') or '').strip().lower()
+
+        messages: list[str] = [f'{label} 안내를 종료합니다.']
+        if kind == 'alarm':
+            messages.append(self._build_alarm_arrival_text(payload))
+        elif kind in {'medication', 'medicine'}:
+            messages.append(self._build_medication_arrival_text(payload, label))
+
+        upcoming = str(next_label or '').strip()
+        if upcoming:
+            messages.append(f'다음 목표 {upcoming}로 안내를 시작합니다.')
+
+        self.publish_tts_to_robot(' '.join(part for part in messages if part).strip())
+
+    @staticmethod
+    def _headline_from_runtime_status(status_text: str) -> str:
+        text = str(status_text or '').strip()
+        if not text:
+            return '대기 중...'
+        if '복약' in text:
+            return '복약 진행 중'
+        if '우편' in text or '전달' in text or '배송' in text:
+            return '우편 전달 진행 중'
+        if '알람' in text or '알림' in text:
+            return '알람 진행 중'
+        if '복귀' in text:
+            return '복귀 중'
+        if '충전' in text:
+            return '충전 중'
+        if '오류' in text:
+            return '오류 상태'
+        if '대기 중' in text:
+            return '대기 중...'
+        return '현재 상태'
+
+    def begin_mail_delivery(self, target: str) -> tuple[bool, str]:
+        target_name = str(target or '').strip()
+        if not target_name:
+            return False, '배송 대상이 비어 있습니다.'
+        place = self.get_named_place_lookup().get(target_name)
+        if not isinstance(place, dict):
+            return False, f"'{target_name}' 장소 설정을 찾지 못했습니다."
+        self._pending_mail_delivery_target = target_name
+        self._mail_confirmation_pending = True
+        self._mail_returning_home = False
+        path_len = self._mark_named_place_target_on_home_map(target_name)
         if hasattr(self, 'home_page'):
-            self.home_page.update_robot_pose_from_status(status)
+            self.home_page.st_main.setText(f"{target_name} 배송 준비 중")
+            if path_len is not None and path_len >= 0.1:
+                self.home_page.st_sub.setText(f"목표까지 약 {path_len:.1f}m")
+            else:
+                self.home_page.st_sub.setText(f"현재 {target_name} 방향입니다.")
+        ok, message = self.submit_command_text(f'{target_name}으로 배송해줘')
+        if not ok:
+            self._pending_mail_delivery_target = ""
+            self._mail_confirmation_pending = False
+            return False, message
+        return True, 'ok'
+
+    def _resolve_home_place_name(self) -> str | None:
+        lookup = self.get_named_place_lookup()
+        if 'home' in lookup:
+            return 'home'
+        for item in self.get_named_place_items():
+            aliases = item.get('aliases', []) or []
+            alias_set = {str(alias).strip() for alias in aliases if str(alias).strip()}
+            if {'집', '대기위치', 'home'} & alias_set:
+                return str(item.get('name', '')).strip() or None
+        return None
+
+    def begin_mail_return_home(self) -> tuple[bool, str]:
+        home_place = self._resolve_home_place_name()
+        if not home_place:
+            return False, 'home 장소 설정을 찾지 못했습니다.'
+        ok, message = self.start_direct_navigation_to_named_place(
+            home_place,
+            announcement_text='대기 위치로 복귀를 시작합니다.',
+        )
+        if not ok:
+            fallback_ok, fallback_message = self.submit_command_text('복귀해줘')
+            if not fallback_ok:
+                return False, f"{message} / fallback 실패: {fallback_message}"
+        self._mail_returning_home = True
+        path_len = self._mark_named_place_target_on_home_map(home_place)
+        if hasattr(self, 'home_page'):
+            self.home_page.st_main.setText('복귀 중...')
+            if path_len is not None and path_len >= 0.1:
+                self.home_page.st_sub.setText(f'대기 위치까지 약 {path_len:.1f}m')
+            else:
+                self.home_page.st_sub.setText('대기 위치로 복귀하고 있습니다.')
+        return True, 'ok'
+
+    def confirm_mail_delivery_and_return_home(self) -> tuple[bool, str]:
+        ok, message = self.publish_confirmation_signal()
+        self._mail_confirmation_pending = False
+        home_ok, home_message = self.begin_mail_return_home()
+        if not home_ok:
+            if not ok:
+                return False, f'전달 확인 신호 전송 실패({message}) 및 홈 복귀 명령 전송 실패({home_message})'
+            return False, f'전달 확인은 완료했지만 홈 복귀 명령 전송에 실패했습니다: {home_message}'
+        if not ok:
+            return True, f'전달 확인 신호 전송 실패(경고): {message}'
+        return True, 'ok'
 
     def _refresh_runtime_capability_status(self) -> None:
-        network_ok = self.is_network_available()
-        mic_ok = self.is_microphone_available()
+        if self._runtime_status_probe_inflight:
+            return
+
+        self._runtime_status_probe_inflight = True
+
+        def _worker() -> None:
+            try:
+                network_ok = self.is_network_available()
+                mic_ok = self.is_microphone_available()
+            except Exception:
+                network_ok = False
+                mic_ok = False
+            self.runtime_capability_status_ready.emit(network_ok, mic_ok)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_runtime_capability_status(self, network_ok: bool, mic_ok: bool) -> None:
+        self._runtime_status_probe_inflight = False
         self.hdr_network_lbl.setText("📶 연결됨" if network_ok else "📶 없음")
         self.hdr_network_lbl.setStyleSheet("color: #10B981;" if network_ok else "color: #EF4444;")
         self.hdr_mic_lbl.setText("🎙️ 인식됨" if mic_ok else "🎙️ 없음")
         self.hdr_mic_lbl.setStyleSheet("color: #10B981;" if mic_ok else "color: #EF4444;")
+        if network_ok:
+            self._sync_remote_audio_preferences(publish_preferences=False)
+        else:
+            self._remote_robot_audio_available = False
 
     @staticmethod
     def is_network_available() -> bool:
@@ -1490,6 +2561,16 @@ class OmniMateMain(QMainWindow):
         if self._ros_bridge is not None:
             try:
                 self._ros_bridge.stop()
+            except Exception:
+                pass
+        if self._data_sync_bridge is not None:
+            try:
+                self._data_sync_bridge.stop()
+            except Exception:
+                pass
+        if self._ros_command_client is not None:
+            try:
+                self._ros_command_client.close()
             except Exception:
                 pass
         super().closeEvent(event)

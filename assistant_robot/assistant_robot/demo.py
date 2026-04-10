@@ -39,6 +39,9 @@ def build_mock_orchestrator(
     navigation_controller: BaseNavigationController | None = None,
     confirmation_service: BaseConfirmationService | None = None,
     tts_provider: BaseTTSProvider | None = None,
+    greeting_cooldown_seconds: int = 5,
+    greeting_once_per_user: bool = True,
+    runtime_data_service: RuntimeDataService | None = None,
 ) -> tuple[OmniOrchestrator, BaseTTSProvider]:
     """기능: 실제 외부 모듈 없이 전체 흐름을 검증할 수 있는 조립 함수."""
 
@@ -56,7 +59,7 @@ def build_mock_orchestrator(
         weather_provider=MockWeatherProvider(),
         weather_formatter=WeatherFormatter(),
         logger=logger,
-        runtime_data_service=RuntimeDataService(),
+        runtime_data_service=runtime_data_service or RuntimeDataService(),
     )
     dispatcher = MissionDispatcher(
         {
@@ -78,7 +81,11 @@ def build_mock_orchestrator(
         next_mission_resolver=NextMissionResolver(queue, battery_policy),
         intent_parser=MockIntentParser(),
         tts_manager=tts_manager,
-        greeting_manager=GreetingManager(),
+        greeting_manager=GreetingManager(
+            cooldown_seconds=max(0, int(greeting_cooldown_seconds)),
+            greet_once_per_user=bool(greeting_once_per_user),
+        ),
+        runtime_data_service=context.runtime_data_service,
         logger=logger,
     )
     orchestrator.update_battery(battery_level=85.0, charging=False)

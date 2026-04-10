@@ -4,8 +4,9 @@ from datetime import datetime
 
 
 class MedicationManager:
-    def __init__(self, filename: str = "medications.json"):
+    def __init__(self, filename: str = "medications.json", on_save=None):
         self.filename = filename
+        self._on_save = on_save
         self.meds = []
         self.last_run_date = datetime.now().strftime("%Y-%m-%d")
         self.load_data()
@@ -48,6 +49,11 @@ class MedicationManager:
         }
         with open(self.filename, "w", encoding="utf-8") as f:
             json.dump(save_dict, f, ensure_ascii=False, indent=4)
+        if callable(self._on_save):
+            try:
+                self._on_save(save_dict)
+            except Exception:
+                pass
 
     def sort_meds(self):
         self.meds.sort(key=lambda x: x.get("time", "00:00"))

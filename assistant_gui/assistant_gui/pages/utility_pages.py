@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from PySide6.QtCore import Qt, QTimer, Signal, QTime, QSize
 from PySide6.QtGui import QImage, QPixmap
@@ -26,10 +27,25 @@ try:
     from assistant_gui.engines.ocr_engine import OcrEngine
     from assistant_gui.engines.gesture_engine import GestureEngine
     from assistant_gui.engines.medication_manager import MedicationManager
+    from assistant_gui.runtime_paths import resolve_runtime_data_path
+    OCR_ENGINE_IMPORT_ERROR = ""
+except Exception as exc:
+    OcrEngine = None
+    OCR_ENGINE_IMPORT_ERROR = str(exc)
+    try:
+        from assistant_gui.engines.gesture_engine import GestureEngine
+        from assistant_gui.engines.medication_manager import MedicationManager
+        from assistant_gui.runtime_paths import resolve_runtime_data_path
+    except ModuleNotFoundError:
+        from engines.gesture_engine import GestureEngine
+        from engines.medication_manager import MedicationManager
+        from runtime_paths import resolve_runtime_data_path
 except ModuleNotFoundError:
     from engines.ocr_engine import OcrEngine
     from engines.gesture_engine import GestureEngine
     from engines.medication_manager import MedicationManager
+    from runtime_paths import resolve_runtime_data_path
+    OCR_ENGINE_IMPORT_ERROR = ""
 
 
 class MedicationCardWidget(QWidget):
@@ -165,8 +181,11 @@ class MedicationPage(QWidget):
     def __init__(self, main_window=None):
         super().__init__()
         self.main_window = main_window
-        med_path = os.path.join(os.path.dirname(__file__), "..", "medications.json")
-        self.med_mgr = MedicationManager(filename=os.path.abspath(med_path))
+        med_path = str(resolve_runtime_data_path(__file__, "ASSISTANT_MEDICATIONS_FILE", "medications.json"))
+        on_save = None
+        if self.main_window is not None and hasattr(self.main_window, "_on_runtime_data_saved"):
+            on_save = lambda _payload: self.main_window._on_runtime_data_saved("medication")
+        self.med_mgr = MedicationManager(filename=os.path.abspath(med_path), on_save=on_save)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(40, 25, 40, 25)
@@ -375,6 +394,7 @@ class MailPage(QWidget):
         btn_lay.addWidget(self.yes_btn)
         layout.addLayout(btn_lay)
         self._resize_camera_view()
+        self._apply_responsive_style()
 
     def _resize_camera_view(self):
         # Keep a 4:3 preview area that grows/shrinks with the page size.
@@ -404,7 +424,21 @@ class MailPage(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._resize_camera_view()
+        self._apply_responsive_style()
         self._apply_scaled_frame()
+
+    def _apply_responsive_style(self):
+        width = max(1, self.width())
+        height = max(1, self.height())
+        base = min(width, height)
+        label_size = max(16, min(22, int(base * 0.022)))
+        button_height = 42 if height < 700 else 48
+        self.ocr_result_lbl.setStyleSheet(
+            f"color: #10B981; font-size: {label_size}px; font-weight: bold; "
+            "background-color: #F3F4F6; padding: 10px; border-radius: 8px;"
+        )
+        self.yes_btn.setMinimumHeight(button_height)
+        self.no_btn.setMinimumHeight(button_height)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -415,6 +449,11 @@ class MailPage(QWidget):
         if self.engine is not None:
             self.engine.stop()
             self.engine = None
+        if OcrEngine is None:
+            detail = OCR_ENGINE_IMPORT_ERROR or "OCR 런타임 의존성을 불러오지 못했습니다."
+            self.ocr_result_lbl.setText(f"OCR 기능 비활성화: {detail}")
+            self.cam_label.setText("OCR 런타임 의존성을 확인하세요.")
+            return
         try:
             self.engine = OcrEngine(self.update_frame)
             self.engine.start()
@@ -458,18 +497,22 @@ class MailPage(QWidget):
     def confirm_target(self):
         if self.engine and self.engine.current_mode == "CONFIRMING":
             target = self.engine.temp_target
-            self.ocr_result_lbl.setText(f"{target}(으)로 배송을 시작합니다.")
+            if self.main_window is not None:
+                ok = False
+                message = "main_window에 배달 시작 기능이 없습니다."
+                if hasattr(self.main_window, "begin_mail_delivery"):
+                    ok, message = self.main_window.begin_mail_delivery(target)
+                if not ok:
+                    self.ocr_result_lbl.setText(f"배송 시작 실패: {message}")
+                    return
+            self.ocr_result_lbl.setText(f"{target}(으)로 실제 배송을 시작합니다.")
             self.yes_btn.setEnabled(False)
             self.no_btn.setEnabled(False)
+            if self.engine is not None:
+                self.engine.stop()
+                self.engine = None
             if self.main_window is not None:
-                if hasattr(self.main_window, "home_page"):
-                    self.main_window.home_page.st_main.setText(f"{target} 배송 중")
-                    self.main_window.home_page.st_sub.setText(f"현재 {target}(으)로 이동하고 있습니다.")
-                if self.engine is not None:
-                    self.engine.stop()
-                    self.engine = None
-                QTimer.singleShot(1500, lambda: self.main_window.switch_page(1))
-                QTimer.singleShot(5000, lambda: self.arrive_at_destination(target))
+                QTimer.singleShot(800, lambda: self.main_window.switch_page(1, manual=True))
 
     def cancel_target(self):
         if self.engine is not None:
@@ -479,17 +522,9 @@ class MailPage(QWidget):
         if self.main_window is not None:
             self.main_window.switch_page(1, manual=True)
 
-    def arrive_at_destination(self, target: str):
-        if self.main_window is not None and hasattr(self.main_window, "home_page"):
-            self.main_window.home_page.st_main.setText(f"{target} 배송 완료")
-            self.main_window.home_page.st_sub.setText(f"{target}에 우편 배달을 완료했습니다.")
-            if hasattr(self.main_window, "gesture_page"):
-                self.main_window.gesture_page.set_target(target)
-                self.main_window.switch_page(12)
-
-
 class GesturePage(QWidget):
     request_return_signal = Signal()
+    return_result_signal = Signal(str, str, int)
 
     def __init__(self, main_window):
         super().__init__()
@@ -497,6 +532,7 @@ class GesturePage(QWidget):
         self.engine = None
         self.is_returning = False
         self.target = ""
+        self.confirmation_kind = "delivery"
         self._last_frame_pixmap: QPixmap | None = None
         self._last_main_size = None
         self._camera_size_initialized = False
@@ -548,6 +584,7 @@ class GesturePage(QWidget):
 
         layout.addWidget(card, alignment=Qt.AlignCenter)
         self.request_return_signal.connect(self.start_return_process)
+        self.return_result_signal.connect(self._apply_return_result)
 
     def _resize_camera_view(self, *, force: bool = False):
         main_size = self.main_window.size() if self.main_window is not None else None
@@ -597,8 +634,25 @@ class GesturePage(QWidget):
         self._apply_scaled_frame()
 
     def set_target(self, target: str):
-        self.target = target
-        self.target_lbl.setText(f"{target} 배송이 완료되었습니다. OK 사인을 기다리는 중입니다.")
+        self.set_confirmation_context(target, 'delivery')
+
+    def set_confirmation_context(self, target: str, kind: str = 'delivery'):
+        normalized_kind = str(kind or 'generic').strip().lower()
+        if normalized_kind not in {'delivery', 'medication', 'alarm', 'generic'}:
+            normalized_kind = 'generic'
+
+        resolved_target = str(target or '').strip() or '현재 대상'
+        self.target = resolved_target
+        self.confirmation_kind = normalized_kind
+
+        if normalized_kind == 'delivery':
+            self.target_lbl.setText(f"{resolved_target} 배송이 완료되었습니다. OK 사인을 기다리는 중입니다.")
+        elif normalized_kind == 'medication':
+            self.target_lbl.setText(f"{resolved_target} 복약 확인을 기다리는 중입니다.")
+        elif normalized_kind == 'alarm':
+            self.target_lbl.setText(f"{resolved_target} 알림 확인을 기다리는 중입니다.")
+        else:
+            self.target_lbl.setText(f"{resolved_target} 확인 응답을 기다리는 중입니다.")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -609,7 +663,7 @@ class GesturePage(QWidget):
         self.is_returning = False
         self.title_lbl.setText("도착 완료! OK 사인을 보여주세요")
         self.cam_label.hide()
-        self.manual_ok_btn.hide()
+        self.manual_ok_btn.show()
         self._last_frame_pixmap = None
         QTimer.singleShot(16, self._show_camera_after_layout)
         if self.engine is not None:
@@ -618,8 +672,6 @@ class GesturePage(QWidget):
         try:
             self.engine = GestureEngine(self.update_ui)
             self.cam_label.setText(f"카메라 연결됨: {self.engine.source_name}")
-            if not self.engine.has_gesture_support:
-                self.manual_ok_btn.show()
             self.engine.start()
         except Exception as exc:
             self.cam_label.setText("카메라 연결 실패")
@@ -642,7 +694,14 @@ class GesturePage(QWidget):
         q_img = QImage(cv_img.data, w, h, ch * w, QImage.Format_BGR888)
         self._last_frame_pixmap = QPixmap.fromImage(q_img)
         self._apply_scaled_frame()
-        self.target_lbl.setText(f"{self.target} 배송 완료\n인식 결과: {gesture_text}")
+        label_by_kind = {
+            'delivery': f"{self.target} 배송 완료",
+            'medication': f"{self.target} 복약 확인",
+            'alarm': f"{self.target} 알림 확인",
+            'generic': f"{self.target} 확인",
+        }
+        prefix = label_by_kind.get(self.confirmation_kind, label_by_kind['generic'])
+        self.target_lbl.setText(f"{prefix}\n인식 결과: {gesture_text}")
 
         if gesture_text.startswith("OK!"):
             if self.engine is not None:
@@ -651,20 +710,56 @@ class GesturePage(QWidget):
             self.request_return_signal.emit()
 
     def start_return_process(self):
+        if self.is_returning:
+            return
         self.is_returning = True
+        self.manual_ok_btn.setEnabled(False)
         self.cam_label.hide()
-        self.title_lbl.setText("복귀 프로세스 시작")
-        self.target_lbl.setText("로봇이 대기 위치로 복귀하고 있습니다.\n잠시만 기다려 주세요.")
-        QTimer.singleShot(5000, self.go_to_main_and_finish)
+        self.title_lbl.setText("확인 처리 중")
+        if self.main_window is None:
+            self.target_lbl.setText("확인 경로를 찾지 못했습니다.")
+            QTimer.singleShot(1200, self.go_to_main_and_finish)
+            return
+
+        threading.Thread(target=self._run_return_process_async, daemon=True).start()
+
+    def _run_return_process_async(self):
+        if self.main_window is None:
+            self.return_result_signal.emit("확인 처리 실패", "확인 경로를 찾지 못했습니다.\n메인 화면으로 복귀합니다.", 1400)
+            return
+
+        if self.confirmation_kind == 'delivery' and hasattr(self.main_window, "confirm_mail_delivery_and_return_home"):
+            try:
+                ok, message = self.main_window.confirm_mail_delivery_and_return_home()
+            except Exception as exc:
+                ok, message = False, f"전달 확인 처리 중 예외가 발생했습니다: {exc}"
+            if not ok:
+                self.return_result_signal.emit("전달 확인 실패", f"{message}\n메인 화면으로 복귀합니다.", 1400)
+                return
+            self.return_result_signal.emit("복귀 프로세스 시작", "전달 확인을 완료했고, 로봇이 대기 위치로 복귀하고 있습니다.", 500)
+            return
+
+        if not hasattr(self.main_window, "publish_confirmation_signal"):
+            self.return_result_signal.emit("확인 처리 실패", "확인 신호 전송 기능이 없습니다. 메인 화면으로 복귀합니다.", 1400)
+            return
+
+        try:
+            ok, message = self.main_window.publish_confirmation_signal()
+        except Exception as exc:
+            ok, message = False, f"확인 처리 중 예외가 발생했습니다: {exc}"
+        if not ok:
+            self.return_result_signal.emit("확인 신호 전송 실패", f"{message}\n메인 화면으로 복귀합니다.", 1400)
+            return
+
+        self.return_result_signal.emit("확인 완료", "확인 신호를 전송했습니다. 메인 화면으로 복귀합니다.", 500)
+
+    def _apply_return_result(self, title: str, body: str, delay_ms: int):
+        self.title_lbl.setText(title)
+        self.target_lbl.setText(body)
+        QTimer.singleShot(max(0, int(delay_ms)), self.go_to_main_and_finish)
 
     def go_to_main_and_finish(self):
-        if self.main_window is not None and hasattr(self.main_window, "home_page"):
-            self.main_window.switch_page(1)
-            self.main_window.home_page.st_main.setText("복귀 완료")
-            self.main_window.home_page.st_sub.setText("대기 위치로 복귀했습니다.")
-            QTimer.singleShot(3000, self._set_idle_status)
-
-    def _set_idle_status(self):
-        if self.main_window is not None and hasattr(self.main_window, "home_page"):
-            self.main_window.home_page.st_main.setText("대기 중...")
-            self.main_window.home_page.st_sub.setText("명령을 기다리고 있습니다.")
+        if self.main_window is not None:
+            self.main_window.switch_page(1, manual=True)
+        self.is_returning = False
+        self.manual_ok_btn.setEnabled(True)

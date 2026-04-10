@@ -3,5 +3,5 @@ app:
   tts_provider: dev
   home_location: charging_station
   allow_queue_registration_while_charging: true
-  low_battery_threshold: 20.0
-  greeting_cooldown_seconds: 60
+  low_battery_threshold: 40.0
+  greeting_cooldown_seconds: 5

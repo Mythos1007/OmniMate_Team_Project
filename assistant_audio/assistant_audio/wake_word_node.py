@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import time
 from typing import Any
 
 from std_msgs.msg import Bool, String
@@ -49,6 +50,19 @@ _DEFAULT_WAKE_WORDS = (
     '에드워드3세',
 )
 
+_AUTO_WEBCAM_TOKENS = {'auto_webcam', 'autowebcam', 'webcam', 'auto_usb', 'auto-usb'}
+_WEBCAM_KEYWORDS = (
+    'webcam',
+    'camera',
+    'usb',
+    'uvc',
+    'logitech',
+    'c920',
+    'c922',
+    'mic',
+    'microphone',
+)
+
 
 class WakeWordNode(Node):
     """Vosk 기반 실시간 웨이크 워드 감지 노드.
@@ -67,9 +81,12 @@ class WakeWordNode(Node):
         self.declare_parameter('wake_word_text', '')
         self.declare_parameter('model_path', 'models/vosk-model-small-ko-0.22')
         self.declare_parameter('audio_device', 'default')
-        self.declare_parameter('audio_block_size', 4000)
-        self.declare_parameter('confidence_threshold', 0.70)
+        self.declare_parameter('audio_block_size', 1600)
+        self.declare_parameter('confidence_threshold', 0.55)
         self.declare_parameter('strict_vocabulary', False)
+        self.declare_parameter('allow_partial_match', True)
+        self.declare_parameter('partial_min_chars', 2)
+        self.declare_parameter('wake_cooldown_sec', 1.2)
         self.declare_parameter('mock_mode', False)
         self.declare_parameter('mock_trigger_period_sec', 0.0)
         self.declare_parameter('wake_topic', '/assistant/wake_detected')
@@ -100,7 +117,10 @@ class WakeWordNode(Node):
         self._mock_trigger_period_sec = float(self.get_parameter('mock_trigger_period_sec').value)
         self._confidence_threshold = float(self.get_parameter('confidence_threshold').value)
         self._strict_vocabulary = bool(self.get_parameter('strict_vocabulary').value)
-        self._audio_block_size = int(self.get_parameter('audio_block_size').value)
+        self._allow_partial_match = bool(self.get_parameter('allow_partial_match').value)
+        self._partial_min_chars = max(1, int(self.get_parameter('partial_min_chars').value))
+        self._wake_cooldown_sec = max(0.0, float(self.get_parameter('wake_cooldown_sec').value))
+        self._audio_block_size = max(800, int(self.get_parameter('audio_block_size').value))
         self._audio_device = self._parse_audio_device(str(self.get_parameter('audio_device').value))
         self._resolved_audio_device = None
         self._wake_words = self._parse_wake_words()
@@ -110,6 +130,8 @@ class WakeWordNode(Node):
         self._model = None
         self._recognizer = None
         self._samplerate = 16000
+        self._last_wake_monotonic = 0.0
+        self._filtered_log_count = 0
 
         if not self._wake_word_enabled:
             self.get_logger().info('Wake-word detection disabled by parameter.')
@@ -133,12 +155,23 @@ class WakeWordNode(Node):
         self._publish_availability(True)
         self.get_logger().info(
             f'Wake-word node listening with Vosk. Wake words: {sorted(self._wake_words)} '
-            f'| threshold={self._confidence_threshold:.2f}'
+            f'| threshold={self._confidence_threshold:.2f} '
+            f'| partial={self._allow_partial_match} '
+            f'| blocksize={self._audio_block_size}'
         )
         self._status_publisher.publish(String(data='Wake-word detector listening.'))
 
-    def trigger_wake(self, matched_word: str = 'manual', confidence: float | None = None) -> None:
+    def trigger_wake(
+        self,
+        matched_word: str = 'manual',
+        confidence: float | None = None,
+        *,
+        force: bool = False,
+    ) -> None:
         if not self._wake_word_enabled or not self._voice_input_enabled:
+            return
+        now = time.monotonic()
+        if not force and (now - self._last_wake_monotonic) < self._wake_cooldown_sec:
             return
 
         self._wake_publisher.publish(Bool(data=True))
@@ -147,6 +180,7 @@ class WakeWordNode(Node):
             status = f'{status} ({confidence:.2f})'
         self._status_publisher.publish(String(data=status))
         self.get_logger().info(status)
+        self._last_wake_monotonic = now
 
     def destroy_node(self) -> bool:
         if self._stream is not None:
@@ -234,6 +268,16 @@ class WakeWordNode(Node):
         while not self._input_queue.empty():
             data = self._input_queue.get()
             if not self._recognizer.AcceptWaveform(data):
+                if self._allow_partial_match:
+                    try:
+                        partial_payload = json.loads(self._recognizer.PartialResult())
+                    except json.JSONDecodeError:
+                        continue
+                    partial_text = str(partial_payload.get('partial', '')).strip()
+                    if len(self._normalize_text(partial_text)) >= self._partial_min_chars:
+                        matched_partial = self._match_wake_phrase(partial_text)
+                        if matched_partial is not None:
+                            self.trigger_wake(matched_partial)
                 continue
 
             try:
@@ -250,17 +294,21 @@ class WakeWordNode(Node):
             for token in result.get('result', []):
                 word = str(token.get('word', '')).strip()
                 confidence = float(token.get('conf', 0.0) or 0.0)
-                if word in self._wake_words and confidence >= self._confidence_threshold:
-                    self.trigger_wake(word, confidence)
+                normalized_word = self._normalize_text(word)
+                matched_word = self._normalized_wake_words.get(normalized_word)
+                if matched_word and confidence >= self._confidence_threshold:
+                    self.trigger_wake(matched_word, confidence)
                     break
                 if word and word != '[unk]':
-                    self.get_logger().info(
-                        f'Filtered similar word: {word} ({confidence * 100.0:.1f}%)'
-                    )
+                    self._filtered_log_count += 1
+                    if self._filtered_log_count % 25 == 0:
+                        self.get_logger().info(
+                            f'Filtered similar word sample: {word} ({confidence * 100.0:.1f}%)'
+                        )
 
     def _on_manual_wake(self, message: Bool) -> None:
         if message.data and self._voice_input_enabled:
-            self.trigger_wake('manual')
+            self.trigger_wake('manual', force=True)
 
     def _on_voice_input_enabled(self, message: Bool) -> None:
         self._voice_input_enabled = bool(message.data)
@@ -271,7 +319,7 @@ class WakeWordNode(Node):
 
     def _publish_mock_wake(self) -> None:
         first_word = next(iter(sorted(self._wake_words)), 'manual')
-        self.trigger_wake(first_word, 1.0)
+        self.trigger_wake(first_word, 1.0, force=True)
 
     def _parse_wake_words(self) -> frozenset[str]:
         raw = str(self.get_parameter('wake_words').value).strip()
@@ -306,6 +354,24 @@ class WakeWordNode(Node):
 
     @staticmethod
     def _resolve_input_device(requested_device: int | str | None) -> int | str | None:
+        if isinstance(requested_device, str) and requested_device.strip().lower() in _AUTO_WEBCAM_TOKENS:
+            try:
+                devices = list(sd.query_devices())
+            except Exception:
+                return None
+
+            for index, device_info in enumerate(devices):
+                if int(device_info.get('max_input_channels', 0)) <= 0:
+                    continue
+                name = str(device_info.get('name', '')).lower()
+                if any(keyword in name for keyword in _WEBCAM_KEYWORDS):
+                    return index
+
+            for index, device_info in enumerate(devices):
+                if int(device_info.get('max_input_channels', 0)) > 0:
+                    return index
+            return None
+
         if requested_device is not None:
             return requested_device
 

@@ -73,6 +73,12 @@ class GeneratedAudioTTSProvider(TTSProvider, ABC):
             self._speak_with_generated_audio(text)
         except Exception as exc:
             if self._fallback_provider is not None:
+                print(
+                    f"[TTS:{self.backend_display_name}] generated audio failed; "
+                    f"falling back to local provider: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 self._fallback_provider.speak(text)
                 return
             if isinstance(exc, RuntimeError):
@@ -80,10 +86,10 @@ class GeneratedAudioTTSProvider(TTSProvider, ABC):
             raise RuntimeError(f'{self.backend_display_name} 합성 실패: {exc}') from exc
 
     def _speak_with_generated_audio(self, text: str) -> None:
-        playback_command = self._resolve_playback_command()
         with tempfile.TemporaryDirectory(prefix='assistant_tts_') as temp_dir:
             audio_path = Path(temp_dir) / f'utterance{self._audio_suffix()}'
             self._generate_audio_file(text, audio_path)
+            playback_command = self._resolve_playback_command(audio_path.suffix.lower())
             self._play_audio_file(playback_command, audio_path)
 
     @abstractmethod
@@ -97,13 +103,36 @@ class GeneratedAudioTTSProvider(TTSProvider, ABC):
     def _play_audio_file(self, playback_command: str, audio_path: Path) -> None:
         subprocess.run(self._build_playback_command(playback_command, audio_path), check=True)
 
-    def _resolve_playback_command(self) -> str:
+    def _resolve_playback_command(self, audio_suffix: str) -> str:
         if self._playback_command and shutil.which(self._playback_command):
-            return self._playback_command
-        for candidate in ('gst-play-1.0', 'ffplay', 'mpg123', 'aplay'):
+            if self._supports_audio_suffix(self._playback_command, audio_suffix):
+                return self._playback_command
+
+        candidate_commands = ['gst-play-1.0', 'ffplay']
+        if audio_suffix == '.mp3':
+            candidate_commands.append('mpg123')
+        if audio_suffix in {'.wav', '.pcm', '.raw'}:
+            candidate_commands.append('aplay')
+
+        for candidate in candidate_commands:
             if shutil.which(candidate):
                 return candidate
-        raise RuntimeError('재생 명령을 찾을 수 없습니다. gst-play-1.0/ffplay/mpg123/aplay 중 하나가 필요합니다.')
+
+        audio_label = audio_suffix or '오디오'
+        raise RuntimeError(
+            f'{audio_label} 재생 명령을 찾을 수 없습니다. '
+            'mp3는 gst-play-1.0/ffplay/mpg123, wav는 gst-play-1.0/ffplay/aplay가 필요합니다.'
+        )
+
+    @staticmethod
+    def _supports_audio_suffix(playback_command: str, audio_suffix: str) -> bool:
+        if playback_command in {'gst-play-1.0', 'ffplay'}:
+            return True
+        if playback_command == 'mpg123':
+            return audio_suffix == '.mp3'
+        if playback_command == 'aplay':
+            return audio_suffix in {'.wav', '.pcm', '.raw'}
+        return True
 
     def _build_playback_command(self, playback_command: str, audio_path: Path) -> list[str]:
         if playback_command == 'gst-play-1.0':

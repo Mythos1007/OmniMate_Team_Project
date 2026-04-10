@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from pathlib import Path
 
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, Float32, String
@@ -12,17 +13,20 @@ from rclpy.node import Node
 
 from assistant_robot.adapters.action_navigation_controller import ActionNavigationController
 from assistant_robot.adapters.place_resolving_navigation_controller import PlaceResolvingNavigationController
+from assistant_robot.adapters.ros_confirmation_service import RosConfirmationService
 from assistant_robot.adapters.ros_tts_provider import RosTopicTTSProvider
 from assistant_robot.constants import (
     ASSISTANT_COMMAND_TOPIC,
+    ASSISTANT_DATA_SYNC_REQUEST_TOPIC,
+    ASSISTANT_DATA_SYNC_SNAPSHOT_TOPIC,
     ASSISTANT_LEGACY_GUI_COMMAND_TOPIC,
     ASSISTANT_LEGACY_VOICE_TEXT_TOPIC,
     ASSISTANT_PERSON_GREETING_ENABLED_TOPIC,
     ASSISTANT_PERSON_RECOGNIZED_TOPIC,
     ASSISTANT_ROBOT_COMMAND_TOPIC,
 )
-from assistant_robot.adapters.mock_confirmation_service import MockConfirmationService
 from assistant_robot.demo import build_mock_orchestrator
+from assistant_robot.services.runtime_data_service import RuntimeDataService
 
 
 class OrchestratorNode(Node):
@@ -31,25 +35,34 @@ class OrchestratorNode(Node):
     def __init__(self) -> None:
         super().__init__("omni_orchestrator_node")
         self.declare_parameter("tts_profile", "demo")
+        self.declare_parameter('greeting_cooldown_seconds', 30)
+        self.declare_parameter('greeting_once_per_user', True)
         self.declare_parameter('greeting_forward_speed_mps', 0.08)
         self.declare_parameter('greeting_forward_duration_sec', 1.6)
         self.declare_parameter('greeting_turn_speed_radps', 1.4)
         self.declare_parameter('greeting_turn_duration_sec', 4.5)
         tts_profile = str(self.get_parameter("tts_profile").value)
+        self._runtime_data_service = RuntimeDataService()
+        self._latest_sync_version = -1
         navigation_controller = PlaceResolvingNavigationController(ActionNavigationController(self))
         self._speak_publisher = self.create_publisher(String, '/assistant/speak', 10)
         self._cmd_vel_publisher = self.create_publisher(Twist, '/assistant/cmd_vel', 10)
         self._orchestrator, _ = build_mock_orchestrator(
             tts_profile=tts_profile,
             navigation_controller=navigation_controller,
-            confirmation_service=MockConfirmationService(),
+            confirmation_service=RosConfirmationService(self),
             tts_provider=RosTopicTTSProvider(self),
+            greeting_cooldown_seconds=int(self.get_parameter('greeting_cooldown_seconds').value),
+            greeting_once_per_user=bool(self.get_parameter('greeting_once_per_user').value),
+            runtime_data_service=self._runtime_data_service,
         )
         self._status_publisher = self.create_publisher(String, "/assistant/orchestrator/status", 10)
+        self._data_sync_request_publisher = self.create_publisher(String, ASSISTANT_DATA_SYNC_REQUEST_TOPIC, 10)
         self.create_subscription(String, ASSISTANT_COMMAND_TOPIC, self._on_command_text, 10)
         self.create_subscription(String, ASSISTANT_ROBOT_COMMAND_TOPIC, self._on_command_text, 10)
         self.create_subscription(String, ASSISTANT_LEGACY_VOICE_TEXT_TOPIC, self._on_command_text, 10)
         self.create_subscription(String, ASSISTANT_LEGACY_GUI_COMMAND_TOPIC, self._on_command_text, 10)
+        self.create_subscription(String, ASSISTANT_DATA_SYNC_SNAPSHOT_TOPIC, self._on_data_sync_snapshot, 10)
         self.create_subscription(String, ASSISTANT_PERSON_RECOGNIZED_TOPIC, self._on_person_recognized, 10)
         self.create_subscription(Bool, ASSISTANT_PERSON_GREETING_ENABLED_TOPIC, self._on_person_greeting_enabled, 10)
         self.create_subscription(Float32, "/assistant/battery_percent", self._on_battery_percent, 10)
@@ -63,13 +76,70 @@ class OrchestratorNode(Node):
         self._person_greeting_motion_timer = None
         self._person_greeting_motion_end_time = 0.0
         self._person_greeting_motion_twist = Twist()
+        self._person_greeting_active_user = ''
+        self._person_greeting_include_motion = False
         # 기능: executor step을 주기적으로 진행시키는 heartbeat 타이머.
         self.create_timer(0.5, self._on_tick)
+        self._sync_request_timer = self.create_timer(1.0, self._request_runtime_data_snapshot_once)
         self.get_logger().info("Omni orchestrator node ready.")
+
+    def _request_runtime_data_snapshot_once(self) -> None:
+        if self._sync_request_timer is not None:
+            self._sync_request_timer.cancel()
+            self.destroy_timer(self._sync_request_timer)
+            self._sync_request_timer = None
+        request_id = f"robot_orchestrator:{int(time.time())}"
+        self._data_sync_request_publisher.publish(String(data=request_id))
+        self.get_logger().info("Requested runtime data snapshot from GUI.")
+
+    @staticmethod
+    def _write_json_file(path: Path, payload: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _on_data_sync_snapshot(self, message: String) -> None:
+        try:
+            payload = json.loads(message.data)
+        except Exception:
+            self.get_logger().warning("Ignored invalid runtime data snapshot payload.")
+            return
+
+        if not isinstance(payload, dict):
+            return
+
+        version = int(payload.get("version", -1)) if str(payload.get("version", "")).isdigit() else -1
+        if version >= 0 and version <= self._latest_sync_version:
+            return
+
+        schedules = payload.get("schedules", {})
+        alarms = payload.get("alarms", [])
+        medications = payload.get("medications", {"last_run_date": "", "meds": []})
+
+        if not isinstance(schedules, dict):
+            schedules = {}
+        if not isinstance(alarms, list):
+            alarms = []
+        if isinstance(medications, list):
+            medications = {"last_run_date": "", "meds": medications}
+        if not isinstance(medications, dict):
+            medications = {"last_run_date": "", "meds": []}
+
+        try:
+            self._write_json_file(self._runtime_data_service.schedule_path, schedules)
+            self._write_json_file(self._runtime_data_service.alarm_path, alarms)
+            self._write_json_file(self._runtime_data_service.medication_path, medications)
+            self._latest_sync_version = max(self._latest_sync_version, version)
+            meds_count = len(medications.get("meds", []) if isinstance(medications.get("meds", []), list) else [])
+            self.get_logger().info(
+                f"Runtime data synced: schedules={len(schedules)}, alarms={len(alarms)}, "
+                f"meds={meds_count}, version={payload.get('version', 'n/a')}"
+            )
+        except Exception as exc:
+            self.get_logger().error(f"Failed to persist runtime data snapshot: {exc}")
 
     def _on_command_text(self, message: String) -> None:
         decision, _ = self._orchestrator.ingest_voice_text(message.data)
-        self.get_logger().info("Command intake: %s", decision)
+        self.get_logger().info(f"Command intake: {decision}")
         self._publish_state()
 
     def _on_battery_percent(self, message: Float32) -> None:
@@ -100,32 +170,20 @@ class OrchestratorNode(Node):
             return
         if not self._orchestrator.should_greet_registered_person(user_name):
             return
-        self._person_greeting_paused_navigation = self._orchestrator.pause_active_navigation_for_overlay()
-        self._start_person_greeting_sequence(user_name)
+        self._person_greeting_paused_navigation = False
+        self._start_person_greeting_sequence(user_name, include_motion=False)
 
-    def _start_person_greeting_sequence(self, user_name: str) -> None:
+    def _start_person_greeting_sequence(self, user_name: str, *, include_motion: bool) -> None:
         self._person_greeting_active = True
+        self._person_greeting_active_user = user_name
+        self._person_greeting_include_motion = False
         self._person_greeting_steps = [
-            ('speak', {'text': f'{user_name}님, 반갑습니다.'}),
-            ('wait', {'duration': 2.2}),
-            ('motion', {
-                'linear': float(self.get_parameter('greeting_forward_speed_mps').value),
-                'angular': 0.0,
-                'duration': float(self.get_parameter('greeting_forward_duration_sec').value),
-            }),
-            ('wait', {'duration': 0.4}),
-            ('speak', {'text': '오늘 하루 잘 보내시고 계신가요?'}),
-            ('wait', {'duration': 2.8}),
-            ('motion', {
-                'linear': 0.0,
-                'angular': float(self.get_parameter('greeting_turn_speed_radps').value),
-                'duration': float(self.get_parameter('greeting_turn_duration_sec').value),
-            }),
-            ('wait', {'duration': 0.4}),
-            ('speak', {'text': '저는 용무가 있어서 이만 가보겠습니다.'}),
-            ('wait', {'duration': 2.4}),
+            ('speak', {'text': f'{user_name}님 안녕하세요. 오늘도 좋은 하루 보내세요.'}),
+            ('wait', {'duration': 2.0}),
         ]
-        self.get_logger().info('Starting person greeting overlay for %s', user_name)
+        self.get_logger().info(
+            f'Starting person greeting overlay for {user_name} (tts_only=True)'
+        )
         self._run_next_person_greeting_step()
 
     def _run_next_person_greeting_step(self) -> None:
@@ -194,11 +252,10 @@ class OrchestratorNode(Node):
     def _finish_person_greeting_sequence(self) -> None:
         self._cancel_person_greeting_step_timer()
         self._stop_person_greeting_motion()
-        if self._person_greeting_paused_navigation:
-            resumed = self._orchestrator.resume_active_navigation_after_overlay()
-            self.get_logger().info('Resumed active navigation after greeting overlay: %s', resumed)
         self._person_greeting_paused_navigation = False
         self._person_greeting_active = False
+        self._person_greeting_active_user = ''
+        self._person_greeting_include_motion = False
         self._publish_state()
 
     def _publish_state(self) -> None:
@@ -213,6 +270,7 @@ class OrchestratorNode(Node):
             "pending_count": state.pending_count,
             "status_message_for_gui": state.status_message_for_gui,
             "current_mission_type": state.current_mission_type,
+            "current_detail": state.current_detail,
         }, ensure_ascii=False)))
 
 

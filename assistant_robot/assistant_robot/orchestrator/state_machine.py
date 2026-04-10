@@ -53,13 +53,14 @@ class RobotStateMachine:
     def set_active_mission(self, mission: Mission) -> None:
         self._state.current_mission_id = mission.mission_id
         self._state.current_mission_type = mission.mission_type.value
-        self._state.current_detail = mission.target_location or mission.target_user or mission.mission_type.value
+        self._state.current_detail = self._mission_detail(mission)
         self._state.top_state = TopState.EXECUTING
         self._refresh_status_message()
 
     def set_waiting_confirmation(self, mission: Mission) -> None:
         self._state.current_mission_id = mission.mission_id
         self._state.current_mission_type = mission.mission_type.value
+        self._state.current_detail = self._mission_detail(mission)
         self._state.top_state = TopState.WAITING_CONFIRMATION
         self._refresh_status_message()
 
@@ -101,22 +102,48 @@ class RobotStateMachine:
     def snapshot(self) -> RobotState:
         return replace(self._state)
 
+    @staticmethod
+    def _mission_detail(mission: Mission) -> str:
+        label = str(mission.payload.get("label", "")).strip()
+        target_location = str(mission.target_location or "").strip()
+        target_user = str(mission.target_user or "").strip()
+
+        if label and target_location and label != target_location:
+            return f"{label} ({target_location})"
+        if label and target_user and label != target_user:
+            return f"{label} ({target_user})"
+        return label or target_location or target_user or mission.mission_type.value
+
+    def _format_queue_suffix(self) -> str:
+        return f" · 대기열 {self._state.pending_count}건" if self._state.pending_count > 0 else ""
+
     def _refresh_status_message(self) -> None:
         # 기능: GUI가 바로 쓸 수 있는 안내 문구를 중앙에서 생성 기능.
         state = self._state
+        detail = state.current_detail.strip()
+        queue_suffix = self._format_queue_suffix()
         if state.top_state == TopState.BOOTING:
             state.status_message_for_gui = "부팅 중입니다."
         elif state.top_state == TopState.EXECUTING:
-            state.status_message_for_gui = f"현재 작업 중, 대기열 {state.pending_count}건"
+            mission_labels = {
+                "medication": "복약 안내 진행 중",
+                "delivery": "우편 전달 진행 중",
+                "alarm": "알람 안내 진행 중",
+                "call": "호출 이동 진행 중",
+                "return_to_base": "대기 위치 복귀 진행 중",
+            }
+            base = mission_labels.get(state.current_mission_type or "", "현재 작업 진행 중")
+            state.status_message_for_gui = f"{base}: {detail}{queue_suffix}" if detail else f"{base}{queue_suffix}"
         elif state.top_state == TopState.WAITING_CONFIRMATION:
             if state.current_mission_type == "medication":
-                state.status_message_for_gui = "복약 확인 응답을 기다리는 중입니다."
+                base = "복약 확인 응답을 기다리는 중입니다."
             elif state.current_mission_type == "delivery":
-                state.status_message_for_gui = "전달 확인 응답을 기다리는 중입니다."
+                base = "전달 확인 응답을 기다리는 중입니다."
             elif state.current_mission_type == "alarm":
-                state.status_message_for_gui = "알림 확인 응답을 기다리는 중입니다."
+                base = "알림 확인 응답을 기다리는 중입니다."
             else:
-                state.status_message_for_gui = "확인 응답을 기다리는 중입니다."
+                base = "확인 응답을 기다리는 중입니다."
+            state.status_message_for_gui = f"{base} 대상: {detail}{queue_suffix}" if detail else f"{base}{queue_suffix}"
         elif state.top_state == TopState.CHARGING:
             if state.charging_eta_minutes is not None:
                 state.status_message_for_gui = f"충전 중입니다. 약 {state.charging_eta_minutes}분 남았습니다."

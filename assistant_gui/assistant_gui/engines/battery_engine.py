@@ -10,6 +10,11 @@ from std_msgs.msg import Bool, Float32
 from sensor_msgs.msg import BatteryState
 from PySide6.QtCore import QObject, Signal
 
+try:
+    from assistant_gui.integrations.ros_runtime import get_shared_ros_runtime
+except ModuleNotFoundError:
+    from integrations.ros_runtime import get_shared_ros_runtime
+
 
 class BatteryEngine(QObject, threading.Thread):
     """ROS2 battery_state를 수신해 Qt 시그널로 전달 기능."""
@@ -20,6 +25,8 @@ class BatteryEngine(QObject, threading.Thread):
         QObject.__init__(self)
         threading.Thread.__init__(self)
         self.daemon = True
+        self._stopped = threading.Event()
+        self._ros_runtime = get_shared_ros_runtime()
 
         if not rclpy.ok():
             rclpy.init()
@@ -97,15 +104,11 @@ class BatteryEngine(QObject, threading.Thread):
         self._emit_if_changed(self.last_percent if self.last_percent >= 0 else 0, bool(msg.data))
 
     def run(self):
-        try:
-            while self._running and rclpy.ok():
-                rclpy.spin_once(self.node, timeout_sec=0.2)
-        except Exception as exc:
-            print(f"[BatteryEngine] spin error: {exc}")
+        if not self._ros_runtime.add_node(self.node):
+            return
+        self._stopped.wait()
 
     def stop(self):
         self._running = False
-        try:
-            self.node.destroy_node()
-        except Exception:
-            pass
+        self._stopped.set()
+        self._ros_runtime.remove_node(self.node)

@@ -13,7 +13,7 @@ from assistant_robot.models.robot_state import RobotState
 class BatteryPolicy:
     """기능: 배터리 관련 intake/dispatch 정책을 단일 클래스로 관리 기능."""
 
-    low_battery_threshold: float = 20.0
+    low_battery_threshold: float = 40.0
     allow_queue_registration_while_charging: bool = True
     return_location: str = "charging_station"
 

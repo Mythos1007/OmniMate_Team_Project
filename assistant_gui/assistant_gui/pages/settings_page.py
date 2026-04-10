@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QWidget,
     QVBoxLayout,
     QLabel,
@@ -49,15 +50,7 @@ class SettingsPage(QWidget):
         self.setObjectName("settings_root")
         self._tts_template_editors: dict[str, QTextEdit] = {}
         self._syncing_tts_templates = False
-        self._size_preset_mapping = {
-            "초소형 (1280 x 420)": (1280, 420),
-            "와이드 낮음 (1600 x 420)": (1600, 420),
-            "와이드 컴팩트 (1600 x 480)": (1600, 480),
-            "소형 (1024 x 576)": (1024, 576),
-            "기본 (1600 x 560)": (1600, 560),
-            "HD (1600 x 900)": (1600, 900),
-            "FHD (1920 x 1080)": (1920, 1080),
-        }
+        self._size_preset_mapping = self._build_size_preset_mapping()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 8, 20, 20)
@@ -80,7 +73,11 @@ class SettingsPage(QWidget):
         self.size_preset_combo = QComboBox()
         self.size_preset_combo.addItems(list(self._size_preset_mapping.keys()))
         self.size_preset_combo.currentTextChanged.connect(self._on_size_preset_changed)
-        self._selected_resolution = self._size_preset_mapping["기본 (1600 x 560)"]
+        default_label = next(
+            (label for label in self._size_preset_mapping if label.startswith("현재 화면 90%")),
+            next(iter(self._size_preset_mapping)),
+        )
+        self._selected_resolution = self._size_preset_mapping[default_label]
 
         resolution_row = QHBoxLayout()
         resolution_row.addWidget(self.size_preset_combo)
@@ -336,6 +333,42 @@ class SettingsPage(QWidget):
         tabs.addTab(face_tab_scroll, "로봇 얼굴")
         layout.addWidget(tabs)
 
+    def _available_screen_size(self) -> tuple[int, int]:
+        screen = None
+        if self.main_window is not None:
+            screen = self.main_window.screen()
+            handle = self.main_window.windowHandle()
+            if handle is not None and handle.screen() is not None:
+                screen = handle.screen()
+        if screen is None:
+            app = QApplication.instance()
+            if app is not None:
+                screen = app.primaryScreen()
+        if screen is None:
+            return 1600, 900
+        geometry = screen.availableGeometry()
+        return max(1024, geometry.width()), max(600, geometry.height())
+
+    def _build_size_preset_mapping(self) -> dict[str, tuple[int, int]]:
+        screen_w, screen_h = self._available_screen_size()
+        fit_w = max(1024, screen_w - 48)
+        fit_h = max(480, screen_h - 72)
+        relaxed_w = max(1024, int(screen_w * 0.9))
+        relaxed_h = max(480, int(screen_h * 0.9))
+
+        presets = {
+            f"현재 화면 맞춤 ({fit_w} x {fit_h})": (fit_w, fit_h),
+            f"현재 화면 90% ({relaxed_w} x {relaxed_h})": (relaxed_w, relaxed_h),
+            "소형 (1024 x 576)": (1024, 576),
+            "균형형 소형 (1280 x 680)": (1280, 680),
+            "기본 (1600 x 780)": (1600, 780),
+            "HD+ (1366 x 768)": (1366, 768),
+            "균형형 (1536 x 864)": (1536, 864),
+            "HD (1600 x 900)": (1600, 900),
+            "FHD (1920 x 1080)": (1920, 1080),
+        }
+        return {label: size for label, size in presets.items() if size[0] <= fit_w and size[1] <= fit_h}
+
     def _sync_ui_from_runtime(self) -> None:
         if self.main_window is None:
             return
@@ -343,7 +376,12 @@ class SettingsPage(QWidget):
         current_h = max(360, self.main_window.height())
 
         preset_by_size = {size: label for label, size in self._size_preset_mapping.items()}
-        preset = preset_by_size.get((current_w, current_h), "기본 (1600 x 560)")
+        preset = preset_by_size.get((current_w, current_h))
+        if preset is None:
+            preset = f"사용자 지정 ({current_w} x {current_h})"
+            self._size_preset_mapping[preset] = (current_w, current_h)
+            if self.size_preset_combo.findText(preset) == -1:
+                self.size_preset_combo.insertItem(0, preset)
         self.size_preset_combo.blockSignals(True)
         self.size_preset_combo.setCurrentText(preset)
         self.size_preset_combo.blockSignals(False)
@@ -413,6 +451,10 @@ class SettingsPage(QWidget):
         self.robot_volume_slider.blockSignals(False)
         self._on_robot_volume_slider_changed(self.robot_volume_slider.value())
 
+        self.tts_test_target_combo.blockSignals(True)
+        self.tts_test_target_combo.setCurrentText("로봇" if self.main_window.prefers_robot_tts() else "PC")
+        self.tts_test_target_combo.blockSignals(False)
+
     def _sync_tts_templates_from_runtime(self) -> None:
         if self.main_window is None:
             return
@@ -444,7 +486,7 @@ class SettingsPage(QWidget):
         if self.main_window is None:
             return
         text = self.main_window.render_tts_scenario(key, self._build_tts_context())
-        ok, msg = self.main_window.speak_text(text, target="pc")
+        ok, msg = self.main_window.speak_text(text, target="auto")
         if not ok:
             QMessageBox.warning(self, "TTS 실행 실패", f"상황별 TTS 실행에 실패했습니다.\n{msg}")
 
@@ -472,27 +514,9 @@ class SettingsPage(QWidget):
         text = self.tts_test_preview.text().strip()
         if not text:
             return
-        target = "robot" if self.tts_test_target_combo.currentText() == "로봇" else "pc"
-        ok, msg = self.main_window.speak_text(text, target=target)
+        ok, msg = self.main_window.speak_text(text, target="robot")
         if ok:
             return
-
-        if target == "robot":
-            fallback_ok, fallback_msg = self.main_window.speak_text(text, target="pc")
-            if fallback_ok:
-                QMessageBox.information(
-                    self,
-                    "로봇 출력 실패",
-                    f"로봇 출력에 실패해 PC로 대신 출력했습니다.\n사유: {msg}",
-                )
-                return
-            QMessageBox.warning(
-                self,
-                "TTS 실행 실패",
-                f"로봇/PC 출력 모두 실패했습니다.\n로봇: {msg}\nPC: {fallback_msg}",
-            )
-            return
-
         QMessageBox.warning(self, "TTS 실행 실패", f"상황별 TTS 실행에 실패했습니다.\n{msg}")
 
     def _reset_tts_templates(self) -> None:
@@ -658,11 +682,25 @@ class SettingsPage(QWidget):
     def _apply_pc_local_voice_enabled(self, checked: bool) -> None:
         if self.main_window is None:
             return
+        if checked and self.robot_voice_input_check.isChecked():
+            self.robot_voice_input_check.blockSignals(True)
+            self.robot_voice_input_check.setChecked(False)
+            self.robot_voice_input_check.blockSignals(False)
+            ok, message = self.main_window.apply_robot_voice_input_enabled(False, publish=True)
+            self.robot_voice_input_status_label.setText(message)
+            if not ok:
+                QMessageBox.warning(self, "로봇 음성 입력 비활성화 실패", message)
         self.main_window.apply_pc_local_voice_enabled(bool(checked))
 
     def _apply_robot_voice_input_enabled(self, checked: bool) -> None:
         if self.main_window is None:
             return
+        if checked and self.pc_local_voice_check.isChecked():
+            # Avoid running two wake/STT capture loops on the same host mic at once.
+            self.pc_local_voice_check.blockSignals(True)
+            self.pc_local_voice_check.setChecked(False)
+            self.pc_local_voice_check.blockSignals(False)
+            self.main_window.apply_pc_local_voice_enabled(False)
         ok, message = self.main_window.apply_robot_voice_input_enabled(bool(checked), publish=True)
         self.robot_voice_input_status_label.setText(message)
         if ok:

@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from assistant_robot.services.place_catalog import PlaceCatalog
+
 
 _WEEKDAY_NAMES = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -40,8 +42,27 @@ class RuntimeDataService:
         if configured:
             return Path(configured).expanduser().resolve()
 
-        source_root = Path(__file__).resolve().parents[3]
-        return (source_root / "assistant_gui" / "assistant_gui" / filename).resolve()
+        here = Path(__file__).resolve()
+        candidates: list[Path] = []
+        for parent in here.parents:
+            candidates.extend(
+                [
+                    (parent / "assistant_gui" / "assistant_gui" / filename).resolve(),
+                    (parent / "src" / "assistant" / "assistant_gui" / "assistant_gui" / filename).resolve(),
+                ]
+            )
+
+        seen: set[Path] = set()
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            if candidate.exists():
+                return candidate
+        for candidate in candidates:
+            if candidate.parent.exists():
+                return candidate
+        return (Path.cwd() / filename).resolve()
 
     def build_schedule_summary(self, source_text: str) -> str:
         target_date = _resolve_target_date(source_text)
@@ -198,11 +219,80 @@ class RuntimeDataService:
             meds = []
         return meds if isinstance(meds, list) else []
 
+    def mark_medication_completed(self, *, target_user: str = "", now: datetime | None = None) -> bool:
+        loaded = self._read_json(self.medication_path)
+        if isinstance(loaded, dict):
+            meds = loaded.get("meds", [])
+            payload_is_dict = True
+        elif isinstance(loaded, list):
+            meds = loaded
+            payload_is_dict = False
+        else:
+            return False
+
+        if not isinstance(meds, list) or not meds:
+            return False
+
+        candidate_indexes = [
+            index for index, item in enumerate(meds)
+            if isinstance(item, dict) and not bool(item.get("active"))
+        ]
+        if not candidate_indexes:
+            return False
+
+        user = str(target_user or "").strip()
+        if user:
+            matched = [
+                index for index in candidate_indexes
+                if str(meds[index].get("name", "")).strip() == user
+            ]
+            if matched:
+                candidate_indexes = matched
+
+        ref_now = now or datetime.now()
+        ref_minutes = ref_now.hour * 60 + ref_now.minute
+
+        def _time_gap(index: int) -> int:
+            raw = str(meds[index].get("time", "")).strip()
+            try:
+                hour_text, minute_text = raw.split(":", 1)
+                scheduled = int(hour_text) * 60 + int(minute_text)
+                return abs(scheduled - ref_minutes)
+            except Exception:
+                return 24 * 60
+
+        selected_index = min(candidate_indexes, key=_time_gap)
+        meds[selected_index]["active"] = True
+
+        if payload_is_dict:
+            loaded["meds"] = meds
+            loaded["last_run_date"] = ref_now.strftime("%Y-%m-%d")
+            self._write_json(self.medication_path, loaded)
+        else:
+            self._write_json(self.medication_path, meds)
+        return True
+
     def iter_due_runtime_missions(self, *, now: datetime | None = None) -> list[DueMissionEntry]:
         current = now or datetime.now()
         current_time = current.strftime("%H:%M")
         current_day = _WEEKDAY_NAMES[current.weekday()]
         due_entries: list[DueMissionEntry] = []
+
+        for schedule in self._load_schedule_items(current.date()):
+            if str(schedule.get("time", "")).strip() != current_time:
+                continue
+            place = str(schedule.get("place", "")).strip()
+            if not place:
+                continue
+            todo = str(schedule.get("todo", "일정")).strip() or "일정"
+            due_entries.append(
+                DueMissionEntry(
+                    mission_type="call",
+                    label=todo,
+                    target_location=place,
+                    announcement_text=f"{todo} 일정 시간이 되어 {place}으로 이동합니다.",
+                )
+            )
 
         for alarm in self.load_alarms():
             if not bool(alarm.get("active")) or str(alarm.get("time", "")).strip() != current_time:
@@ -226,16 +316,35 @@ class RuntimeDataService:
                 continue
             if str(medication.get("time", "")).strip() != current_time:
                 continue
+            target_location = self._resolve_medication_target_location(medication)
             due_entries.append(
                 DueMissionEntry(
                     mission_type="medication",
                     label=str(medication.get("name", "복약")).strip() or "복약",
-                    target_location="",
+                    target_location=target_location,
                     announcement_text=self._build_medication_announcement(medication),
                 )
             )
 
         return due_entries
+
+    @staticmethod
+    def _resolve_medication_target_location(medication: dict[str, Any]) -> str:
+        target_name = str(medication.get("name", "")).strip()
+        try:
+            catalog = PlaceCatalog()
+            metadata = catalog.place_metadata()
+            if target_name:
+                resolved_name = catalog.resolve(target_name)
+                if resolved_name in metadata:
+                    return resolved_name
+            for configured_target in catalog.medication_targets:
+                resolved_name = catalog.resolve(configured_target)
+                if resolved_name in metadata:
+                    return resolved_name
+        except Exception:
+            pass
+        return ""
 
     def _build_alarm_announcement(self, alarm: dict[str, Any]) -> str:
         target = str(alarm.get("target", "사용자")).strip() or "사용자"

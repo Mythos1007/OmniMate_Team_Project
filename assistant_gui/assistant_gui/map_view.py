@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+import math
 import time
 
-from PySide6.QtCore import Qt, Signal, QPointF, QRect
+from PySide6.QtCore import Qt, Signal, QPointF, QRect, QTimer
 from PySide6.QtGui import QPixmap, QPainter, QTransform, QColor, QPen, QPainterPath
 from PySide6.QtWidgets import QWidget
 
 try:
-    from assistant_gui.route_path_overlay import RoutePathOverlay
     from assistant_gui.path_planner import RoutePathPlanner
 except ModuleNotFoundError:
-    from route_path_overlay import RoutePathOverlay
     from path_planner import RoutePathPlanner
 
 
@@ -30,7 +29,7 @@ class RotatedMapView(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(170)
+        self.setMinimumHeight(120)
         self._map_path = map_path
         self._coord_rotation_deg = coord_rotation_deg
         self._resolution = resolution_m_per_px
@@ -39,26 +38,26 @@ class RotatedMapView(QWidget):
         self._base_map: QPixmap | None = None
         self._coord_rot_tf: QTransform | None = None
         self._robot_rot_pt: QPointF | None = None
+        self._robot_yaw_rad = 0.0
         self._target_rot_pt: QPointF | None = None
         self._path_points: list = []
         self._pose_is_default = True
-        self._route_overlay = RoutePathOverlay(max_points=700, min_distance_px=2.0)
         self._path_planner = RoutePathPlanner(
             wall_threshold=200,
-            wall_inflate_pixels=5,
+            wall_inflate_pixels=2,
             max_snap_distance=40,
         )
         self._cached_obstacle_map = None
         self._nav_target_world: tuple[float, float] | None = None
         self._last_replan_ts = 0.0
         self._last_replan_robot_pt: QPointF | None = None
+        self._replan_pending = False
         self._load_map()
 
     def _load_map(self) -> None:
         pixmap = QPixmap(self._map_path)
         if pixmap.isNull():
             self._base_map = None
-            self._route_overlay.reset()
             self.update()
             return
         self._base_map = pixmap
@@ -79,7 +78,7 @@ class RotatedMapView(QWidget):
         tf.translate(-w / 2.0, -h / 2.0)
         self._coord_rot_tf = tf
 
-    def set_robot_world_pose(self, x_m: float, y_m: float, *, is_default: bool = False) -> None:
+    def set_robot_world_pose(self, x_m: float, y_m: float, *, yaw_rad: float = 0.0, is_default: bool = False) -> None:
         if self._base_map is None or self._coord_rot_tf is None:
             return
         display_w = float(self._base_map.width())
@@ -100,27 +99,41 @@ class RotatedMapView(QWidget):
         px = px_ref * (display_w / ref_w)
         py = py_ref * (display_h / ref_h)
         self._robot_rot_pt = self._coord_rot_tf.map(QPointF(px, py))
+        self._robot_yaw_rad = float(yaw_rad)
         self._pose_is_default = is_default
         if is_default:
-            self._route_overlay.reset()
             self._nav_target_world = None
-        else:
-            self._route_overlay.add_point(self._robot_rot_pt)
-            if self._nav_target_world is not None:
-                now = time.monotonic()
-                should_replan = False
-                if now - self._last_replan_ts >= 0.25:
-                    if self._last_replan_robot_pt is None:
-                        should_replan = True
-                    else:
-                        dx = self._robot_rot_pt.x() - self._last_replan_robot_pt.x()
-                        dy = self._robot_rot_pt.y() - self._last_replan_robot_pt.y()
-                        should_replan = (dx * dx + dy * dy) >= 9.0
-                if should_replan:
-                    wx, wy = self._nav_target_world
-                    self.draw_path_to_target(wx, wy)
-                    return
         self.update()
+        if is_default or self._nav_target_world is None:
+            return
+
+        now = time.monotonic()
+        should_replan = False
+        if now - self._last_replan_ts >= 0.18:
+            if self._last_replan_robot_pt is None:
+                should_replan = True
+            else:
+                dx = self._robot_rot_pt.x() - self._last_replan_robot_pt.x()
+                dy = self._robot_rot_pt.y() - self._last_replan_robot_pt.y()
+                should_replan = (dx * dx + dy * dy) >= 9.0
+        if should_replan:
+            self._schedule_replan()
+
+    def _schedule_replan(self) -> None:
+        if self._nav_target_world is None or self._replan_pending:
+            return
+        self._replan_pending = True
+        target_world = self._nav_target_world
+
+        def _run() -> None:
+            try:
+                if self._nav_target_world is None or target_world is None:
+                    return
+                self.draw_path_to_target(target_world[0], target_world[1])
+            finally:
+                self._replan_pending = False
+
+        QTimer.singleShot(0, _run)
 
     def get_path_length_m(self) -> float | None:
         """현재 경로의 남은 거리 미터값 반환 기능. 경로 부재 시 None 반환."""
@@ -160,11 +173,14 @@ class RotatedMapView(QWidget):
         self.update()
 
     def clear_route_path(self) -> None:
-        self._route_overlay.reset()
         self._target_rot_pt = None
         self._path_points = []
         self._nav_target_world = None
+        self._replan_pending = False
         self.update()
+
+    def get_nav_target_world(self) -> tuple[float, float] | None:
+        return self._nav_target_world
 
     def draw_path_to_target(self, target_world_x: float, target_world_y: float) -> None:
         if self._base_map is None or self._coord_rot_tf is None or self._robot_rot_pt is None:
@@ -301,7 +317,6 @@ class RotatedMapView(QWidget):
         y0 = (self.height() - draw_h) // 2
         target = QRect(x0, y0, draw_w, draw_h)
         painter.drawPixmap(target, self._base_map)
-        self._route_overlay.draw(painter, scale=scale, offset_x=float(x0), offset_y=float(y0))
 
         if len(self._path_points) > 1:
             display_points = [
@@ -350,12 +365,23 @@ class RotatedMapView(QWidget):
         label = "현위치"
         mx = float(min(max(mx, 6.0), max(6.0, self.width() - 6.0)))
         my = float(min(max(my, 6.0), max(6.0, self.height() - 6.0)))
+        heading_rad = (-self._robot_yaw_rad) + math.radians(self._coord_rotation_deg)
+        nose = QPointF(mx + math.cos(heading_rad) * 16.0, my + math.sin(heading_rad) * 16.0)
+        left = QPointF(mx + math.cos(heading_rad + 2.45) * 10.0, my + math.sin(heading_rad + 2.45) * 10.0)
+        right = QPointF(mx + math.cos(heading_rad - 2.45) * 10.0, my + math.sin(heading_rad - 2.45) * 10.0)
+
         painter.setPen(QPen(QColor("#FFFFFF"), 2))
         painter.setBrush(QColor("#EF4444"))
-        painter.drawEllipse(QPointF(mx, my), 9.0, 9.0)
-        painter.setPen(QPen(QColor("#FFFFFF"), 2))
-        painter.drawLine(QPointF(mx - 7.0, my), QPointF(mx + 7.0, my))
-        painter.drawLine(QPointF(mx, my - 7.0), QPointF(mx, my + 7.0))
+        painter.drawEllipse(QPointF(mx, my), 8.5, 8.5)
+
+        arrow_path = QPainterPath(nose)
+        arrow_path.lineTo(left)
+        arrow_path.lineTo(QPointF(mx, my))
+        arrow_path.lineTo(right)
+        arrow_path.closeSubpath()
+        painter.setBrush(QColor("#FDE68A"))
+        painter.setPen(QPen(QColor("#7C2D12"), 1.5))
+        painter.drawPath(arrow_path)
 
         fm = painter.fontMetrics()
         label_w = fm.horizontalAdvance(label) + 12

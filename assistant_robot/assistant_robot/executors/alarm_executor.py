@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from assistant_robot.executors.base import BaseMissionExecution, BaseMissionExecutor, ExecutorContext
 from assistant_robot.interfaces.navigation_controller import NavigationHandle, NavigationState
 from assistant_robot.models.enums import MissionStatus
@@ -13,6 +15,8 @@ class AlarmExecution(BaseMissionExecution):
         self._phase = 0
         self._navigation: NavigationHandle | None = None
         self._paused_target_location: str | None = None
+        self._confirmation_started_at = 0.0
+        self._confirmation_timeout_sec = 30.0
 
     def step(self) -> MissionEvent:
         target_location = self.mission.target_location or "알림 위치"
@@ -31,8 +35,7 @@ class AlarmExecution(BaseMissionExecution):
             return MissionEvent(
                 mission_id=self.mission.mission_id,
                 event_type="navigating",
-                message_key="navigation.resume",
-                message_params={"target_location": target_location},
+                message_key=None,
             )
         if self._phase == 2 and self._navigation is not None:
             self._navigation = self.context.navigation_controller.poll_navigation(self._navigation)
@@ -47,6 +50,7 @@ class AlarmExecution(BaseMissionExecution):
             return MissionEvent(mission_id=self.mission.mission_id, event_type="navigating")
         if self._phase == 3:
             self._phase = 4
+            self._confirmation_started_at = time.monotonic()
             message_key = "medication.reminder" if self.mission.payload.get("medication") else "alarm.wait_confirm"
             return MissionEvent(
                 mission_id=self.mission.mission_id,
@@ -55,7 +59,12 @@ class AlarmExecution(BaseMissionExecution):
                 message_params={"user_name": self.mission.target_user or "사용자"},
                 details={"speak_text": announcement_text} if announcement_text else {},
             )
-        confirmed = self.context.confirmation_service.wait_for_confirmation(mission_id=self.mission.mission_id)
+        confirmed = self.context.confirmation_service.wait_for_confirmation(
+            mission_id=self.mission.mission_id,
+            timeout_seconds=0,
+        )
+        if not confirmed and (time.monotonic() - self._confirmation_started_at) < self._confirmation_timeout_sec:
+            return MissionEvent(mission_id=self.mission.mission_id, event_type="waiting_confirmation")
         if self.mission.payload.get("medication") and confirmed:
             return MissionEvent(
                 mission_id=self.mission.mission_id,

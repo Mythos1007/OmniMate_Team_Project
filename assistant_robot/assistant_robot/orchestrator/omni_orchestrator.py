@@ -16,6 +16,7 @@ from assistant_robot.orchestrator.mission_queue import MissionQueue
 from assistant_robot.orchestrator.next_mission_resolver import NextMissionResolver
 from assistant_robot.orchestrator.state_machine import RobotStateMachine
 from assistant_robot.services.greeting_manager import GreetingManager
+from assistant_robot.services.runtime_data_service import RuntimeDataService
 from assistant_robot.services.tts_manager import TTSManager
 
 
@@ -40,6 +41,7 @@ class OmniOrchestrator:
         intent_parser: BaseIntentParser,
         tts_manager: TTSManager,
         greeting_manager: GreetingManager,
+        runtime_data_service: RuntimeDataService | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._queue = mission_queue
@@ -50,6 +52,7 @@ class OmniOrchestrator:
         self._intent_parser = intent_parser
         self._tts_manager = tts_manager
         self._greeting_manager = greeting_manager
+        self._runtime_data_service = runtime_data_service
         self._logger = logger or logging.getLogger(__name__)
         self._active_mission: Mission | None = None
         self._active_execution: BaseMissionExecution | None = None
@@ -332,6 +335,18 @@ class OmniOrchestrator:
     def _handle_event(self, event: MissionEvent) -> MissionResult:
         # 기능: executor 이벤트를 상태머신/TTS로 반영해 최종 미션 결과로 변환 기능.
         status = MissionStatus(event.details.get("status", MissionStatus.RUNNING.value)) if event.details.get("status") else None
+        if (
+            status == MissionStatus.COMPLETED
+            and self._active_mission is not None
+            and self._active_mission.mission_type == MissionType.MEDICATION
+            and self._runtime_data_service is not None
+        ):
+            try:
+                self._runtime_data_service.mark_medication_completed(
+                    target_user=str(self._active_mission.target_user or "").strip(),
+                )
+            except Exception as exc:
+                self._logger.warning("Failed to persist medication completion: %s", exc)
         if self._active_mission is not None:
             self._state_machine.apply_event(self._active_mission, event_type=event.event_type, status=status)
         speak_text = str(event.details.get("speak_text", "")).strip() if event.details else ""

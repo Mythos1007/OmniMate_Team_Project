@@ -2,7 +2,7 @@ messages:
   system.boot:
     - "안내 로봇 시스템을 시작합니다."
   queue.accepted:
-    - "요청을 접수했습니다. 현재 작업이 끝나면 바로 진행하겠습니다."
+    - "요청을 접수했습니다. 바로 진행하겠습니다."
   queue.accepted_with_pending:
     - "요청을 접수했습니다. 현재 대기 중인 작업은 {pending_count}건입니다."
   battery.low_reject_move:
@@ -24,9 +24,9 @@ messages:
   delivery.completed:
     - "우편 전달이 완료되었습니다."
   call.start:
-    - "{user_name}님이 계신 위치로 이동하겠습니다."
+    - "{user_name} 위치로 이동하겠습니다."
   call.arrived:
-    - "{user_name}님, 요청하신 위치에 도착했습니다."
+    - "{user_name} 위치에 도착했습니다."
   alarm.start:
     - "{target_location}로 알림 전달을 시작하겠습니다."
   alarm.arrived:

@@ -12,6 +12,12 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description() -> LaunchDescription:
     bringup_share = get_package_share_directory('assistant_bringup')
     distributed_launch = os.path.join(bringup_share, 'launch', 'assistant_distributed.launch.py')
+    default_nav2_params_file = os.path.join(bringup_share, 'config', 'nav2_burger_narrow.yaml')
+    if not os.path.exists(default_nav2_params_file):
+        default_nav2_params_file = ''
+    default_map_file = os.environ.get('ASSISTANT_NAV_MAP', os.path.expanduser('~/map.yaml'))
+    if not os.path.exists(default_map_file):
+        default_map_file = ''
 
     machine_role = LaunchConfiguration('machine_role')
     ros_domain_id = LaunchConfiguration('ros_domain_id')
@@ -25,9 +31,9 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument('machine_role', default_value='pc'),
             DeclareLaunchArgument('ros_domain_id', default_value='142'),
-            DeclareLaunchArgument('ros_static_peers', default_value=''),
-            DeclareLaunchArgument('map', default_value=''),
-            DeclareLaunchArgument('nav2_params_file', default_value=''),
+            DeclareLaunchArgument('ros_static_peers', default_value='192.168.96.23'),
+            DeclareLaunchArgument('map', default_value=default_map_file),
+            DeclareLaunchArgument('nav2_params_file', default_value=default_nav2_params_file),
             DeclareLaunchArgument('use_sim_time', default_value='false'),
             DeclareLaunchArgument('enable_rviz', default_value='false'),
             IncludeLaunchDescription(
@@ -52,7 +58,7 @@ def generate_launch_description() -> LaunchDescription:
                     'enable_turtlebot_base': 'true',
                     'enable_cmd_vel_adapter': 'true',
                     'assistant_enable_ros_bridge': '1',
-                    'assistant_face_voice_loop': '1',
+                    'assistant_face_voice_loop': '0',
                     'assistant_voice_only_face_mode': '1',
                 }.items(),
             ),

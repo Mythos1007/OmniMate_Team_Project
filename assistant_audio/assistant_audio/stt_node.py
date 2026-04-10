@@ -6,6 +6,7 @@ from assistant_audio.providers.stt_provider import (
     MockSTTProvider,
     PocketsphinxSTTProvider,
     STTProvider,
+    resolve_arecord_audio_device,
 )
 
 from std_msgs.msg import Bool, String
@@ -77,6 +78,13 @@ class STTNode(Node):
         mock_mode = bool(self.get_parameter('mock_mode').value)
         mock_transcript = self.get_parameter('mock_transcript_text').value
         mock_confidence = float(self.get_parameter('mock_confidence').value)
+        requested_audio_device = str(self.get_parameter('audio_device').value)
+        resolved_audio_device = resolve_arecord_audio_device(requested_audio_device)
+
+        self.get_logger().info(
+            f'STT audio device resolved: requested="{requested_audio_device}" '
+            f'-> using="{resolved_audio_device}"'
+        )
 
         if mock_mode or backend == 'mock':
             return MockSTTProvider(sample_text=mock_transcript, confidence=mock_confidence)
@@ -86,7 +94,7 @@ class STTNode(Node):
                 record_seconds=float(self.get_parameter('record_duration_sec').value),
                 sample_rate_hz=int(self.get_parameter('sample_rate_hz').value),
                 channels=int(self.get_parameter('audio_channels').value),
-                audio_device=str(self.get_parameter('audio_device').value),
+                audio_device=resolved_audio_device,
                 acoustic_model_dir=str(self.get_parameter('acoustic_model_dir').value),
                 language_model_path=str(self.get_parameter('language_model_path').value),
                 dictionary_path=str(self.get_parameter('dictionary_path').value),
@@ -97,7 +105,7 @@ class STTNode(Node):
                 record_seconds=float(self.get_parameter('record_duration_sec').value),
                 sample_rate_hz=int(self.get_parameter('sample_rate_hz').value),
                 channels=int(self.get_parameter('audio_channels').value),
-                audio_device=str(self.get_parameter('audio_device').value),
+                audio_device=resolved_audio_device,
                 model_size=str(self.get_parameter('whisper_model_size').value),
                 language=str(self.get_parameter('stt_language').value),
                 compute_type=str(self.get_parameter('whisper_compute_type').value),

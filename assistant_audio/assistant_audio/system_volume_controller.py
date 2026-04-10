@@ -27,13 +27,21 @@ class SystemVolumeController:
             if command is not None:
                 return backend, command
         if self._backend != 'auto':
-            raise RuntimeError(f'지원하지 않는 볼륨 백엔드입니다: {self._backend}')
+            raise RuntimeError(
+                f'요청한 볼륨 백엔드({self._backend})를 사용할 수 없고, '
+                '대체 가능한 볼륨 제어 명령도 찾지 못했습니다.'
+            )
         raise RuntimeError('사용 가능한 볼륨 제어 명령을 찾지 못했습니다. wpctl/pactl/amixer 중 하나가 필요합니다.')
 
     def _candidate_backends(self) -> list[str]:
         if self._backend == 'auto':
             return ['wpctl', 'pactl', 'amixer']
-        return [self._backend]
+        candidates = [self._backend, 'wpctl', 'pactl', 'amixer']
+        deduped: list[str] = []
+        for backend in candidates:
+            if backend not in deduped:
+                deduped.append(backend)
+        return deduped
 
     def _build_command(self, backend: str, percent: int) -> list[str] | None:
         if backend == 'wpctl':

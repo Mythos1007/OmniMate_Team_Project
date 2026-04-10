@@ -8,7 +8,6 @@ ROS2 환경이 없어도 GUI 단독 실행이 가능하도록 import 실패를 �
 from __future__ import annotations
 
 import json
-import threading
 from typing import Callable
 
 try:
@@ -23,6 +22,11 @@ except ImportError:
 
 # ─── Qt 임포트 (PySide6) ────────────────────────────────────────────────────
 from PySide6.QtCore import QObject, Signal
+
+try:
+    from assistant_gui.integrations.ros_runtime import get_shared_ros_runtime
+except ModuleNotFoundError:
+    from integrations.ros_runtime import get_shared_ros_runtime
 
 
 class RosStateBridge(QObject):
@@ -41,9 +45,9 @@ class RosStateBridge(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._thread: threading.Thread | None = None
         self._node: object | None = None  # rclpy.Node (type erase to avoid import error)
         self._running = False
+        self._ros_runtime = get_shared_ros_runtime()
 
     def start(self) -> None:
         """ROS2 스핀 스레드를 시작 기능. ROS2가 없으면 아무것도 하지 않는다."""
@@ -51,33 +55,25 @@ class RosStateBridge(QObject):
             return
         if self._running:
             return
-        self._running = True
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
+        try:
+            self._node = _StateSubscriberNode(
+                on_state=lambda s: self.state_changed.emit(s),
+                on_status=lambda s: self.status_changed.emit(s),
+            )
+            if not self._ros_runtime.add_node(self._node):
+                self._node = None
+                return
+            self._running = True
+        except Exception as exc:
+            print(f'[RosStateBridge] ROS2 setup error: {exc}')
+            self._node = None
+            self._running = False
 
     def stop(self) -> None:
         self._running = False
         if self._node is not None:
-            try:
-                self._node.destroy_node()  # type: ignore[union-attr]
-            except Exception:
-                pass
-
-    def _spin(self) -> None:
-        try:
-            if not rclpy.ok():
-                rclpy.init()
-            node = _StateSubscriberNode(
-                on_state=lambda s: self.state_changed.emit(s),
-                on_status=lambda s: self.status_changed.emit(s),
-            )
-            self._node = node
-            while self._running and rclpy.ok():
-                rclpy.spin_once(node, timeout_sec=0.1)
-        except Exception as exc:
-            print(f'[RosStateBridge] ROS2 spin error: {exc}')
-        finally:
-            self._running = False
+            self._ros_runtime.remove_node(self._node)
+            self._node = None
 
 
 if _ROS_AVAILABLE:

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from importlib import import_module
 import math
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,63 @@ class STTProvider(ABC):
     @abstractmethod
     def transcribe(self) -> tuple[str, float]:
         """인식된 텍스트와 신뢰도를 반환 기능."""
+
+
+_AUTO_WEBCAM_TOKENS = {'auto_webcam', 'autowebcam', 'webcam', 'auto_usb', 'auto-usb'}
+_WEBCAM_KEYWORDS = (
+    'webcam',
+    'camera',
+    'usb',
+    'uvc',
+    'logitech',
+    'c920',
+    'c922',
+    'mic',
+    'microphone',
+)
+
+
+def _list_arecord_capture_devices() -> list[tuple[int, int, str]]:
+    command = ['arecord', '-l']
+    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    devices: list[tuple[int, int, str]] = []
+    pattern = re.compile(r'card\s+(\d+):.*?device\s+(\d+):\s*(.*)$', re.IGNORECASE)
+
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        match = pattern.search(line)
+        if match is None:
+            continue
+        card_index = int(match.group(1))
+        device_index = int(match.group(2))
+        description = match.group(3).strip() or line
+        devices.append((card_index, device_index, description))
+    return devices
+
+
+def resolve_arecord_audio_device(requested_device: str) -> str:
+    """Resolve arecord device token, preferring webcam-like capture inputs when requested."""
+    token = requested_device.strip()
+    lowered = token.lower()
+    if not token or lowered == 'default':
+        return 'default'
+    if lowered not in _AUTO_WEBCAM_TOKENS:
+        return token
+
+    try:
+        devices = _list_arecord_capture_devices()
+    except Exception:
+        return 'default'
+
+    if not devices:
+        return 'default'
+
+    for card_index, device_index, description in devices:
+        normalized = description.lower()
+        if any(keyword in normalized for keyword in _WEBCAM_KEYWORDS):
+            return f'plughw:{card_index},{device_index}'
+
+    return 'default'
 
 
 class MockSTTProvider(STTProvider):

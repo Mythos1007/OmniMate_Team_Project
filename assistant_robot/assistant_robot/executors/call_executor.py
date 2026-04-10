@@ -38,8 +38,7 @@ class CallExecution(BaseMissionExecution):
             return MissionEvent(
                 mission_id=self.mission.mission_id,
                 event_type="navigating",
-                message_key="navigation.resume",
-                message_params={"target_location": target_location},
+                message_key=None,
             )
         if self._phase == 2 and self._navigation is not None:
             self._navigation = self.context.navigation_controller.poll_navigation(self._navigation)

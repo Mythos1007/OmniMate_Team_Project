@@ -30,6 +30,23 @@ def _optional_include(package_name: str, launch_file: str, launch_arguments: dic
     )
 
 
+def _optional_nav2_rviz_node(*, use_sim_time: str):
+    try:
+        tb3_share = get_package_share_directory('turtlebot3_navigation2')
+    except PackageNotFoundError:
+        return LogInfo(msg="[assistant_distributed] Skipping RViz: package 'turtlebot3_navigation2' not found")
+
+    rviz_config = os.path.join(tb3_share, 'rviz', 'tb3_navigation2.rviz')
+    return Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', rviz_config],
+        parameters=[{'use_sim_time': str(use_sim_time).strip().lower() in {'1', 'true', 'yes', 'on'}}],
+        output='screen',
+    )
+
+
 def _build_runtime(context, *args, **kwargs):
     del args, kwargs
     actions = []
@@ -46,8 +63,8 @@ def _build_runtime(context, *args, **kwargs):
         actions.append(LogInfo(msg='[assistant_distributed] Starting PC-side compute stack'))
 
         if _get_bool(context, 'enable_nav2'):
-            nav2_package = _get_str(context, 'nav2_package') or 'turtlebot3_navigation2'
-            nav2_launch_file = _get_str(context, 'nav2_launch_file') or 'navigation2.launch.py'
+            nav2_package = _get_str(context, 'nav2_package') or 'nav2_bringup'
+            nav2_launch_file = _get_str(context, 'nav2_launch_file') or 'bringup_launch.py'
             nav2_arguments = {
                 'use_sim_time': _get_str(context, 'use_sim_time') or 'false',
                 'autostart': _get_str(context, 'nav2_autostart') or 'true',
@@ -58,10 +75,10 @@ def _build_runtime(context, *args, **kwargs):
                 nav2_arguments['map'] = map_file
             if nav2_params_file:
                 nav2_arguments['params_file'] = nav2_params_file
-            if _get_str(context, 'enable_rviz'):
-                nav2_arguments['use_rviz'] = _get_str(context, 'enable_rviz')
-
             actions.append(_optional_include(nav2_package, nav2_launch_file, nav2_arguments))
+
+            if _get_bool(context, 'enable_rviz'):
+                actions.append(_optional_nav2_rviz_node(use_sim_time=_get_str(context, 'use_sim_time') or 'false'))
 
         if _get_bool(context, 'enable_pc_audio'):
             actions.extend(
@@ -222,6 +239,22 @@ def generate_launch_description() -> LaunchDescription:
     bringup_share = get_package_share_directory('assistant_bringup')
     default_audio_params = os.path.join(bringup_share, 'config', 'assistant_audio.yaml')
     default_robot_params = os.path.join(bringup_share, 'config', 'assistant_robot.yaml')
+    default_nav2_params_file = os.path.join(bringup_share, 'config', 'nav2_burger_narrow.yaml')
+    if not os.path.exists(default_nav2_params_file):
+        default_nav2_params_file = ''
+    default_named_places_file = os.path.join(bringup_share, 'config', 'named_places_catalog.yaml')
+    if not os.path.exists(default_named_places_file):
+        default_named_places_file = ''
+    default_map_file = os.environ.get('ASSISTANT_NAV_MAP', os.path.expanduser('~/map.yaml'))
+    if not os.path.exists(default_map_file):
+        default_map_file = ''
+    default_display = os.environ.get('DISPLAY', ':1')
+    default_xauthority = os.environ.get('XAUTHORITY', '')
+    default_qt_platform = os.environ.get('QT_QPA_PLATFORM', 'xcb')
+    default_secrets_file = os.environ.get(
+        'ASSISTANT_SECRETS_FILE',
+        os.path.expanduser('~/.config/assistant/secrets.json'),
+    )
 
     return LaunchDescription(
         [
@@ -236,14 +269,14 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument('ros_static_peers', default_value=''),
             DeclareLaunchArgument('use_sim_time', default_value='false'),
             DeclareLaunchArgument('enable_nav2', default_value='true'),
-            DeclareLaunchArgument('nav2_package', default_value='turtlebot3_navigation2'),
-            DeclareLaunchArgument('nav2_launch_file', default_value='navigation2.launch.py'),
-            DeclareLaunchArgument('nav2_params_file', default_value=''),
-            DeclareLaunchArgument('map', default_value=''),
+            DeclareLaunchArgument('nav2_package', default_value='nav2_bringup'),
+            DeclareLaunchArgument('nav2_launch_file', default_value='bringup_launch.py'),
+            DeclareLaunchArgument('nav2_params_file', default_value=default_nav2_params_file),
+            DeclareLaunchArgument('map', default_value=default_map_file),
             DeclareLaunchArgument('nav2_autostart', default_value='true'),
             DeclareLaunchArgument('enable_rviz', default_value='false'),
-            DeclareLaunchArgument('enable_pc_audio', default_value='true'),
-            DeclareLaunchArgument('enable_robot_audio', default_value='false'),
+            DeclareLaunchArgument('enable_pc_audio', default_value='false'),
+            DeclareLaunchArgument('enable_robot_audio', default_value='true'),
             DeclareLaunchArgument('enable_gui', default_value='true'),
             DeclareLaunchArgument('enable_intent_debug', default_value='false'),
             DeclareLaunchArgument('enable_turtlebot_base', default_value='false'),
@@ -262,6 +295,11 @@ def generate_launch_description() -> LaunchDescription:
             SetEnvironmentVariable(name='ASSISTANT_ENABLE_ROS_BRIDGE', value=LaunchConfiguration('assistant_enable_ros_bridge')),
             SetEnvironmentVariable(name='ASSISTANT_FACE_VOICE_LOOP', value=LaunchConfiguration('assistant_face_voice_loop')),
             SetEnvironmentVariable(name='ASSISTANT_VOICE_ONLY_FACE_MODE', value=LaunchConfiguration('assistant_voice_only_face_mode')),
+            SetEnvironmentVariable(name='ASSISTANT_NAMED_PLACES_FILE', value=default_named_places_file),
+            SetEnvironmentVariable(name='DISPLAY', value=default_display),
+            SetEnvironmentVariable(name='XAUTHORITY', value=default_xauthority),
+            SetEnvironmentVariable(name='QT_QPA_PLATFORM', value=default_qt_platform),
+            SetEnvironmentVariable(name='ASSISTANT_SECRETS_FILE', value=default_secrets_file),
             OpaqueFunction(function=_build_runtime),
         ]
     )

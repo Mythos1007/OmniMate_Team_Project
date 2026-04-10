@@ -5,6 +5,8 @@ import re
 from assistant_robot.interfaces.intent_parser import BaseIntentParser, IntentParseResult
 from assistant_robot.models.command_request import CommandRequest
 from assistant_robot.models.enums import CommandSource, MissionType
+from assistant_robot.services.navigation_target_normalizer import normalize_navigation_target
+from assistant_robot.services.navigation_target_parser import parse_coordinate_target
 
 
 class MockIntentParser(BaseIntentParser):
@@ -22,6 +24,9 @@ class MockIntentParser(BaseIntentParser):
 
         wakeword_detected = bool(re.search(r"옴니(\s*야)?", raw_text))
         cleaned = re.sub(r"옴니\s*야?", "", raw_text).strip()
+        coordinate_command = self._parse_coordinate_command(cleaned)
+        if coordinate_command is not None:
+            return IntentParseResult(primary_command=coordinate_command)
         commands = self._extract_commands(cleaned)
         if wakeword_detected and not commands:
             return IntentParseResult(
@@ -41,6 +46,18 @@ class MockIntentParser(BaseIntentParser):
             primary_command=primary,
             rejected_commands=rejected,
             rejection_message_key="rejection.multi_command" if rejected else None,
+        )
+
+    def _parse_coordinate_command(self, raw_text: str) -> CommandRequest | None:
+        text = str(raw_text or "").strip()
+        if parse_coordinate_target(text) is None:
+            return None
+        return CommandRequest(
+            source=CommandSource.GUI,
+            raw_text=text,
+            parsed_intent={"intent_name": MissionType.CALL.value},
+            requires_movement=True,
+            target_location=text,
         )
 
     def _parse_scheduler_command(self, raw_text: str) -> CommandRequest | None:
@@ -215,7 +232,7 @@ class MockIntentParser(BaseIntentParser):
 
             move_match = re.search(r"(?P<target>[가-힣A-Za-z0-9_ ]+?)로 가", segment)
             if move_match:
-                target = move_match.group("target").strip()
+                target = normalize_navigation_target(move_match.group("target"))
                 commands.append(
                     CommandRequest(
                         source=CommandSource.VOICE,
@@ -229,7 +246,7 @@ class MockIntentParser(BaseIntentParser):
 
             guide_match = re.search(r"(?P<target>[가-힣A-Za-z0-9_ ]+?)\s*안내\s*해\s*줘", segment)
             if guide_match:
-                target = guide_match.group("target").strip()
+                target = normalize_navigation_target(guide_match.group("target"))
                 commands.append(
                     CommandRequest(
                         source=CommandSource.VOICE,
@@ -249,7 +266,7 @@ class MockIntentParser(BaseIntentParser):
                 segment,
             )
             if delivery_match:
-                target = delivery_match.group("target").strip()
+                target = normalize_navigation_target(delivery_match.group("target"))
                 commands.append(
                     CommandRequest(
                         source=CommandSource.VOICE,

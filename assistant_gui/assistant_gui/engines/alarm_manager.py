@@ -3,8 +3,9 @@ import os
 
 
 class AlarmManager:
-    def __init__(self, filename: str = "alarms.json"):
+    def __init__(self, filename: str = "alarms.json", on_save=None):
         self.filename = filename
+        self._on_save = on_save
         self.alarms = []
         self.load_data()
 
@@ -28,6 +29,11 @@ class AlarmManager:
         try:
             with open(self.filename, "w", encoding="utf-8") as f:
                 json.dump(self.alarms, f, ensure_ascii=False, indent=4)
+            if callable(self._on_save):
+                try:
+                    self._on_save(self.alarms)
+                except Exception:
+                    pass
         except Exception as exc:
             print(f"알람 저장 오류: {exc}")
 

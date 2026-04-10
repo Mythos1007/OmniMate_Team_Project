@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import importlib
 import os
 import re
@@ -8,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import wave
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal, QTimer
@@ -42,70 +44,112 @@ class SpeechRecognitionWorker(QThread):
         self.language = language
         self.record_seconds = max(2, int(record_seconds))
 
-    def run(self) -> None:
-        try:
-            sr = importlib.import_module("speech_recognition")
-        except Exception:
-            self.failed.emit("speech_recognition 패키지가 없어 음성 인식을 실행할 수 없습니다.")
-            return
-        recognizer = sr.Recognizer()
+    @staticmethod
+    def _resolve_vosk_model_path() -> Path | None:
+        configured = os.getenv("ASSISTANT_VOSK_MODEL_PATH", "").strip()
+        project_root = Path(__file__).resolve().parents[3]
+        candidates = []
+        if configured:
+            candidates.append(Path(configured).expanduser())
+        candidates.extend(
+            [
+                Path.cwd() / "models" / "vosk-model-small-ko-0.22",
+                project_root / "models" / "vosk-model-small-ko-0.22",
+                project_root.parent / "models" / "vosk-model-small-ko-0.22",
+            ]
+        )
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_dir():
+                return candidate.resolve()
+        return None
 
-        mic_error = ""
-        if hasattr(sr, "Microphone"):
-            try:
-                with sr.Microphone(sample_rate=16000) as source:
-                    recognizer.dynamic_energy_threshold = True
-                    recognizer.pause_threshold = 0.6
-                    recognizer.non_speaking_duration = 0.3
-                    recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                    self.status_changed.emit("마이크 대기 중... (실시간 구간 감지)")
-                    audio_data = recognizer.listen(
-                        source,
-                        timeout=max(2, min(8, self.record_seconds)),
-                        phrase_time_limit=self.record_seconds,
-                    )
-
-                self.status_changed.emit("음성 인식 처리 중...")
-                text = recognizer.recognize_google(audio_data, language=self.language)
-                self.recognized.emit(text)
-                return
-            except Exception as exc:
-                mic_error = str(exc)
-
+    @classmethod
+    def has_local_stt_backend(cls) -> bool:
         if shutil.which("arecord") is None:
-            msg = "arecord가 없어 마이크 녹음을 시작할 수 없습니다."
-            if mic_error:
-                msg = f"{msg} (microphone fallback 실패: {mic_error})"
-            self.failed.emit(msg)
-            return
+            return False
+        try:
+            importlib.import_module("vosk")
+        except Exception:
+            return False
+        return cls._resolve_vosk_model_path() is not None
 
+    def _record_with_arecord(self) -> str:
+        if shutil.which("arecord") is None:
+            raise RuntimeError("arecord가 없어 마이크 녹음을 시작할 수 없습니다.")
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            temp_path = tmp.name
+
+        self.status_changed.emit(f"마이크 녹음 중... (최대 {self.record_seconds}초)")
+        record_cmd = [
+            "arecord",
+            "-q",
+            "-d",
+            str(self.record_seconds),
+            "-f",
+            "S16_LE",
+            "-r",
+            "16000",
+            "-c",
+            "1",
+            temp_path,
+        ]
+        record_timeout = max(8, self.record_seconds + 4)
+        record_result = subprocess.run(record_cmd, capture_output=True, text=True, timeout=record_timeout)
+        if record_result.returncode != 0:
+            msg = (record_result.stderr or record_result.stdout or "녹음 실패").strip()
+            raise RuntimeError(f"마이크 녹음 실패: {msg}")
+        return temp_path
+
+    def _recognize_with_vosk(self, wav_path: str) -> str | None:
+        model_path = self._resolve_vosk_model_path()
+        if model_path is None:
+            return None
+
+        try:
+            vosk_module = importlib.import_module("vosk")
+            model = vosk_module.Model(str(model_path))
+            recognizer = vosk_module.KaldiRecognizer(model, 16000)
+            recognizer.SetWords(True)
+
+            self.status_changed.emit("오프라인 음성 인식 처리 중... (Vosk)")
+            with wave.open(wav_path, "rb") as wav_file:
+                while True:
+                    data = wav_file.readframes(4000)
+                    if not data:
+                        break
+                    recognizer.AcceptWaveform(data)
+
+            final_result = json.loads(recognizer.FinalResult() or "{}")
+            text = str(final_result.get("text") or "").strip()
+            return text or None
+        except Exception:
+            return None
+
+    def run(self) -> None:
         temp_path = ""
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                temp_path = tmp.name
+            temp_path = self._record_with_arecord()
 
-            self.status_changed.emit(f"마이크 녹음 중... (최대 {self.record_seconds}초)")
-            record_cmd = [
-                "arecord",
-                "-q",
-                "-d",
-                str(self.record_seconds),
-                "-f",
-                "S16_LE",
-                "-r",
-                "16000",
-                "-c",
-                "1",
-                temp_path,
-            ]
-            record_timeout = max(8, self.record_seconds + 4)
-            record_result = subprocess.run(record_cmd, capture_output=True, text=True, timeout=record_timeout)
-            if record_result.returncode != 0:
-                msg = (record_result.stderr or record_result.stdout or "녹음 실패").strip()
-                self.failed.emit(f"마이크 녹음 실패: {msg}")
+            text = self._recognize_with_vosk(temp_path)
+            if text:
+                self.recognized.emit(text)
                 return
 
-            self.status_changed.emit("음성 인식 처리 중...")
+            try:
+                sr = importlib.import_module("speech_recognition")
+            except Exception as exc:
+                model_path = self._resolve_vosk_model_path()
+                if model_path is None:
+                    self.failed.emit(
+                        f"오프라인 Vosk 모델이 없고 speech_recognition import도 실패했습니다: {exc}"
+                    )
+                else:
+                    self.failed.emit(f"speech_recognition import 실패: {exc}")
+                return
+
+            recognizer = sr.Recognizer()
+            self.status_changed.emit("온라인 음성 인식 처리 중... (Google)")
             with sr.AudioFile(temp_path) as source:
                 audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data, language=self.language)
@@ -220,7 +264,7 @@ class VoiceTestPage(QWidget):
         if not self.main_window.is_microphone_available():
             self.log_area.append("시스템: 마이크가 없어 테스트를 시작할 수 없습니다.")
             return
-        if not self.main_window.is_network_available():
+        if not self.main_window.is_network_available() and not SpeechRecognitionWorker.has_local_stt_backend():
             self.log_area.append("시스템: 네트워크가 없어 온라인 STT를 실행할 수 없습니다.")
             return
 

@@ -3,8 +3,9 @@ import os
 
 
 class ScheduleManager:
-    def __init__(self, filename="schedules.json"):
+    def __init__(self, filename="schedules.json", on_save=None):
         self.filename = filename
+        self._on_save = on_save
         self.schedules = self.load_data()
 
     def load_data(self):
@@ -16,6 +17,11 @@ class ScheduleManager:
     def save_data(self):
         with open(self.filename, "w", encoding="utf-8") as f:
             json.dump(self.schedules, f, ensure_ascii=False, indent=4)
+        if callable(self._on_save):
+            try:
+                self._on_save(self.schedules)
+            except Exception:
+                pass
 
     def add_item(self, date_str, time_str, todo, place):
         if date_str not in self.schedules:

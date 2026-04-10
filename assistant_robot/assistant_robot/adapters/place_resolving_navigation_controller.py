@@ -4,6 +4,7 @@ from typing import Any
 
 from assistant_robot.interfaces.navigation_controller import BaseNavigationController, NavigationHandle
 from assistant_robot.services.place_catalog import PlaceCatalog
+from assistant_robot.services.navigation_target_normalizer import normalize_navigation_target
 
 
 class PlaceResolvingNavigationController(BaseNavigationController):
@@ -67,4 +68,4 @@ class PlaceResolvingNavigationController(BaseNavigationController):
 
     @staticmethod
     def _compact(value: str) -> str:
-        return "".join(str(value or "").lower().split())
+        return normalize_navigation_target(str(value or "").lower())

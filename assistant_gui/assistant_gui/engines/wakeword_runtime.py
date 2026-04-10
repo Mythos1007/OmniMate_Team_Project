@@ -115,7 +115,16 @@ class GlobalWakewordController(QObject):
             if time.monotonic() < self._pause_until:
                 QTimer.singleShot(250, lambda: self._start_worker(delay_ms=0))
                 return
-            if not self._main_window.is_microphone_available() or not self._main_window.is_network_available():
+            local_stt_available = False
+            try:
+                local_stt_available = bool(SpeechRecognitionWorker.has_local_stt_backend())
+            except Exception:
+                local_stt_available = False
+
+            if not self._main_window.is_microphone_available():
+                QTimer.singleShot(2500, lambda: self._start_worker(delay_ms=0))
+                return
+            if not self._main_window.is_network_available() and not local_stt_available:
                 QTimer.singleShot(2500, lambda: self._start_worker(delay_ms=0))
                 return
 
@@ -216,7 +225,6 @@ class GlobalWakewordController(QObject):
             self._speak_text(message)
         elif submitted:
             self._set_header_state("📝 명령을 전달했습니다", "#10B981")
-            self._speak_text("등록했습니다.")
         else:
             self._set_header_state("⚠️ 명령 전송 실패", "#EF4444")
             if hasattr(self._main_window, "shared_face_controller"):

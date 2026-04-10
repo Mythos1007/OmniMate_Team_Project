@@ -5,10 +5,13 @@ wake_word_node:
     wake_words: "김루이엘리자베스돌쇠에드워드3세,김루이,루이,김엘리자베스,엘리자베스,김돌쇠,돌쇠,돌쇠야,돌세,김에드워드,에드워드,김에드워드3세,에드워드3세"
     wake_word_text: ""        # legacy — wake_words 로 대체됨
     model_path: models/vosk-model-small-ko-0.22
-    audio_device: default
-    audio_block_size: 4000
-    confidence_threshold: 0.70
+    audio_device: auto_webcam
+    audio_block_size: 1600
+    confidence_threshold: 0.55
     strict_vocabulary: false
+    allow_partial_match: true
+    partial_min_chars: 2
+    wake_cooldown_sec: 1.2
     mock_mode: false
     mock_trigger_period_sec: 0.0
 
@@ -27,7 +30,7 @@ stt_node:
     record_duration_sec: 4.0
     sample_rate_hz: 16000
     audio_channels: 1
-    audio_device: default
+    audio_device: auto_webcam
     acoustic_model_dir: /usr/share/pocketsphinx/model/en-us/en-us
     language_model_path: /usr/share/pocketsphinx/model/en-us/en-us.lm.bin
     dictionary_path: /usr/share/pocketsphinx/model/en-us/cmudict-en-us.dict
@@ -38,10 +41,10 @@ tts_node:
     language: ko
     voice_name: ko-KR-SunHiNeural
     fallback_voice_name: female1
-    speaker_volume_backend: wpctl
+    speaker_volume_backend: auto
     speaker_volume_device: Master
     speaker_volume_percent: 35
-    playback_command: gst-play-1.0
+    playback_command: mpg123
     elevenlabs_api_key: ""
     elevenlabs_voice_id: ""
     elevenlabs_model_id: eleven_multilingual_v2

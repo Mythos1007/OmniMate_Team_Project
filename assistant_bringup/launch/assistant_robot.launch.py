@@ -1,3 +1,5 @@
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, SetEnvironmentVariable
 from launch.conditions import IfCondition
@@ -7,6 +9,11 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description() -> LaunchDescription:
+    default_named_places_file = os.path.join(
+        FindPackageShare('assistant_bringup').find('assistant_bringup'),
+        'config',
+        'named_places_catalog.yaml',
+    )
     audio_params = LaunchConfiguration('audio_params')
     robot_params = LaunchConfiguration('robot_params')
     named_places_params = LaunchConfiguration('named_places_params')
@@ -72,6 +79,7 @@ def generate_launch_description() -> LaunchDescription:
             SetEnvironmentVariable(name='ROS_LOCALHOST_ONLY', value=ros_localhost_only),
             SetEnvironmentVariable(name='RMW_IMPLEMENTATION', value=rmw_implementation),
             SetEnvironmentVariable(name='CYCLONEDDS_URI', value=cyclonedds_uri),
+            SetEnvironmentVariable(name='ASSISTANT_NAMED_PLACES_FILE', value=default_named_places_file),
             LogInfo(msg=['[assistant_robot] enable_robot_compute=', enable_robot_compute]),
             LogInfo(msg=['[assistant_robot] enable_tts=', enable_tts]),
             LogInfo(

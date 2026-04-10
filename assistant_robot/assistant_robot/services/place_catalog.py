@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib.resources import files
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from assistant_robot.services.navigation_target_normalizer import normalize_navigation_target
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +74,30 @@ class PlaceCatalog:
         return raw_name
 
     def _load_raw(self) -> dict[str, Any]:
-        config_path = self._config_path or Path(files("assistant_robot.config").joinpath("named_places.yaml"))
+        config_path = self._resolve_config_path()
         loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         return loaded if isinstance(loaded, dict) else {}
+
+    def _resolve_config_path(self) -> Path:
+        if self._config_path is not None:
+            return self._config_path
+
+        env_path = os.environ.get("ASSISTANT_NAMED_PLACES_FILE", "").strip()
+        if env_path:
+            candidate = Path(env_path).expanduser().resolve()
+            if candidate.exists():
+                return candidate
+
+        source_root = Path(__file__).resolve().parents[3]
+        source_candidates = (
+            source_root / "assistant_bringup" / "config" / "named_places_catalog.yaml",
+            source_root / "assistant_robot" / "assistant_robot" / "config" / "named_places.yaml",
+        )
+        for candidate in source_candidates:
+            if candidate.exists():
+                return candidate
+
+        return Path(files("assistant_robot.config").joinpath("named_places.yaml"))
 
     def _load_places(self) -> dict[str, NamedPlace]:
         raw_places = self._raw.get("named_places", {})
@@ -96,4 +120,4 @@ class PlaceCatalog:
 
     @staticmethod
     def _compact(value: str) -> str:
-        return "".join(str(value or "").lower().split())
+        return normalize_navigation_target(str(value or "").lower())
