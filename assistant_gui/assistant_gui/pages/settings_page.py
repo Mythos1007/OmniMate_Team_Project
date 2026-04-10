@@ -177,6 +177,7 @@ class SettingsPage(QWidget):
         info_layout.addWidget(QLabel("- 얼굴 FPS를 높이면 부드럽지만 CPU 사용량이 늘 수 있습니다."))
         info_layout.addWidget(QLabel("- 기본 음성 엔진은 호출어 응답 TTS에 우선 적용됩니다."))
         info_layout.addWidget(QLabel("- Edge TTS를 사용하려면 edge-tts 실행 파일이 필요합니다."))
+        info_layout.addWidget(QLabel("- 운영 기본 모드는 PC 마이크 입력 + 로봇 스피커 출력입니다."))
         info_layout.addWidget(QLabel("- 호출어 응답 전용 테스트를 켜면 '옴니야'에만 응답하고 명령은 받지 않습니다."))
         info_layout.addWidget(QLabel("- 테스트 탭은 운영 상태와 분리 또는 공유 모드로 동작합니다."))
         general_layout.addWidget(info_group)

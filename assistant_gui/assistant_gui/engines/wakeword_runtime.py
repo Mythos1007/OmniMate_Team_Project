@@ -274,7 +274,7 @@ class GlobalWakewordController(QObject):
         )
 
     def _speak_text(self, text: str) -> bool:
-        ok, message = self._main_window.speak_text(text, target="pc")
+        ok, message = self._main_window.speak_text(text, target="robot")
         if not ok:
             self._set_header_state("⚠️ 음성 출력 실패 (TTS 확인 필요)", "#EF4444")
             return False

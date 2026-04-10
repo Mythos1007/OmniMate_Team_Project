@@ -565,9 +565,10 @@ class GesturePage(QWidget):
         self.cam_label.setMinimumSize(320, 240)
         self.cam_label.setStyleSheet("background-color: #1F2937; border-radius: 16px; border: 4px solid #10B981; color: white;")
 
-        detail_lbl = QLabel("손으로 OK 사인을 보여주면 복귀를 시작합니다.")
+        detail_lbl = QLabel("손으로 OK 사인을 보여주면 확인을 완료합니다.")
         detail_lbl.setAlignment(Qt.AlignCenter)
         detail_lbl.setProperty("class", "SubText")
+        self.detail_lbl = detail_lbl
 
         self.manual_ok_btn = QPushButton("수동 확인 (OK)")
         self.manual_ok_btn.setProperty("class", "PrimaryBtn")
@@ -647,12 +648,16 @@ class GesturePage(QWidget):
 
         if normalized_kind == 'delivery':
             self.target_lbl.setText(f"{resolved_target} 배송이 완료되었습니다. OK 사인을 기다리는 중입니다.")
+            self.detail_lbl.setText("손으로 OK 사인을 보여주면 전달 확인을 완료합니다.")
         elif normalized_kind == 'medication':
             self.target_lbl.setText(f"{resolved_target} 복약 확인을 기다리는 중입니다.")
+            self.detail_lbl.setText("손으로 OK 사인을 보여주면 복약 확인을 완료합니다.")
         elif normalized_kind == 'alarm':
             self.target_lbl.setText(f"{resolved_target} 알림 확인을 기다리는 중입니다.")
+            self.detail_lbl.setText("손으로 OK 사인을 보여주면 알림 확인을 완료합니다.")
         else:
             self.target_lbl.setText(f"{resolved_target} 확인 응답을 기다리는 중입니다.")
+            self.detail_lbl.setText("손으로 OK 사인을 보여주면 확인을 완료합니다.")
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -736,7 +741,10 @@ class GesturePage(QWidget):
             if not ok:
                 self.return_result_signal.emit("전달 확인 실패", f"{message}\n메인 화면으로 복귀합니다.", 1400)
                 return
-            self.return_result_signal.emit("복귀 프로세스 시작", "전달 확인을 완료했고, 로봇이 대기 위치로 복귀하고 있습니다.", 500)
+            if str(message or '').strip() and str(message).strip().lower() != 'ok':
+                self.return_result_signal.emit("확인 완료", f"{message}\n메인 화면으로 복귀합니다.", 900)
+                return
+            self.return_result_signal.emit("확인 완료", "전달 확인을 완료했습니다. 메인 화면으로 복귀합니다.", 500)
             return
 
         if not hasattr(self.main_window, "publish_confirmation_signal"):

@@ -26,7 +26,7 @@ class NavBridgeNode(Node):
         super().__init__('nav_bridge_node')
         self.declare_parameter('require_goal_orientation', False)
         self._require_goal_orientation = bool(self.get_parameter('require_goal_orientation').value)
-        self.declare_parameter('arrival_distance_m', 0.05)
+        self.declare_parameter('arrival_distance_m', 0.10)
         self._arrival_distance_m: float = float(self.get_parameter('arrival_distance_m').value)
         self._robot_x: float = 0.0
         self._robot_y: float = 0.0
@@ -233,7 +233,9 @@ class NavBridgeNode(Node):
                 return True
             if normalized in {'0', 'false', 'no', 'off'}:
                 return False
-        return self._require_goal_orientation
+        # Named places default to position-only arrival unless explicitly opted in.
+        # This avoids Nav2 RotateToGoal stalls at desks/waypoints near the goal.
+        return False
 
     def _quaternion_from_yaw(self, yaw: float) -> Quaternion:
         quaternion = Quaternion()

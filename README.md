@@ -1,445 +1,382 @@
-# OmniMate Assistant 워크스페이스
+# OmniMate Team Project
 
-이 저장소는 `assistant` 디렉토리부터 버전 관리합니다.
+OmniMate는 TurtleBot 기반 실내 안내 로봇 프로젝트다. 현재 최종본 기준으로 GUI, 음성, 작업 오케스트레이션, 일정 기반 작업, 확인 제스처, TurtleBot 주행 스택을 하나의 ROS 2 워크스페이스로 묶어 운영한다.
 
-- 현재 git root: `/home/mythos/assistant_ws/src/assistant`
-- 원격 저장소: `https://github.com/Mythos1007/OmniMate_Team_Project.git`
+이 저장소는 다음 시나리오를 목표로 한다.
 
-## 1) 권장 개발 환경
+- PC에서 GUI와 상위 제어 로직을 실행한다.
+- TurtleBot에서는 베이스 주행, 로봇 오디오 입출력, 사람 인식 같은 센서/실기반 노드를 실행한다.
+- 사용자는 PC 마이크로 호출어를 말하고, 로봇 스피커로 응답을 듣는다.
+- 배달, 복약, 알람 임무는 목적지 도착 후 확인 페이지를 통해 완료된다.
 
-- OS: Ubuntu 22.04 LTS
-- ROS 2: Humble Hawksbill
-- Python: 3.10.x (Humble 기본)
-- Colcon: 0.15+
+## 1. 현재 최종 동작 요약
 
-## 2) 필수 Python 패키지
+현재 코드 기준 핵심 정책은 다음과 같다.
 
-### 2-1) 시스템 패키지 먼저 설치 (apt 필요)
+- 메인 실행 관리자: `assistant_robot/orchestrator/omni_orchestrator.py`
+- ROS 브리지 노드: `assistant_robot/orchestrator/orchestrator_node.py`
+- GUI 메인 앱: `assistant_gui/assistant_gui/main.py`
+- 확인 페이지: `assistant_gui/assistant_gui/pages/utility_pages.py`
+- 직접 안내 액션 브리지: `assistant_robot/nav_bridge_node.py`
 
-```bash
-sudo apt update
-sudo apt install -y \
-  python3-pyaudio \
-  portaudio19-dev \
-  alsa-utils \
-  libatlas-base-dev \
-  libopenblas-dev
-```
+현재 반영된 운영 정책:
 
-### 2-2) 핵심 Python 패키지 (setuptools에서 정의)
+- 호출어 입력 기본 경로는 `PC 마이크`다.
+- 응답 출력 기본 경로는 `로봇 스피커`다.
+- 배달 확인 후 자동으로 home 복귀하지 않는다.
+- idle 상태에서 자동으로 home 복귀하지 않는다.
+- named place 안내는 기본적으로 `위치 도착`만 요구하고, 각도 정렬은 명시적으로 필요한 장소에만 적용한다.
+- 복귀 완료라는 별도 GUI 상태는 보여주지 않고, 끝나면 바로 일반 `대기 중...` 상태로 돌아간다.
+- 배달/복약/알람의 확인 페이지는 도착 후 `WAITING_CONFIRMATION` 상태에서만 열린다.
 
-각 패키지의 setup.py에서 자동 설치:
-- **assistant_gui**: PySide6, requests, SpeechRecognition, PyYAML
-- **assistant_audio**: edge-tts, faster-whisper, requests, sounddevice, vosk
-- **assistant_brain**: setuptools 만
+## 2. 전체 로직 구조
 
-### 2-3) 확장 Python 패키지 (공식 스크립트/빌드 시)
+### 2-1. 상위 흐름
 
-```bash
-pip install \
-  PySide6==6.11.0 \
-  requests==2.33.1 \
-  SpeechRecognition==3.16.0 \
-  edge-tts==7.2.8 \
-  faster-whisper==1.0.11 \
-  vosk==0.3.45 \
-  google-cloud-speech==2.25.0 \
-  PyYAML==6.0.2 \
-  numpy==1.26.4 \
-  scipy==1.15.3 \
-  opencv-python==4.8.0.74 \
-  mediapipe==0.10.9 \
-  face-recognition==1.3.0 \
-  face-recognition-models==0.3.0 \
-  easyocr==1.7.1 \
-  ultralytics==8.4.17 \
-  deepface==0.0.99 \
-  mtcnn==1.0.0 \
-  scikit-image==0.25.2 \
-  sounddevice==0.5.5 \
-  pandas==2.3.3 \
-  pytz==2022.1 \
-  python-dateutil==2.9.0.post0
-```
+1. 입력이 들어온다.
+2. 명령이 정규화된다.
+3. 오케스트레이터가 미션으로 변환한다.
+4. 큐와 상태머신이 현재 실행 가능 여부를 판단한다.
+5. 네비게이션/알림/복약/배달 실행기가 미션을 수행한다.
+6. 도착 후 필요한 임무는 확인 대기 상태로 전환된다.
+7. 확인이 끝나면 미션이 완료되고 GUI는 다시 대기 상태로 돌아간다.
 
-### 2-4) 선택 설치 (클라우드/특수 기능)
+### 2-2. 입력 경로
 
-```bash
-# 클라우드 TTS
-pip install elevenlabs==1.8.0 cartesia==1.0.0
+- PC 마이크 호출어: GUI 내부 글로벌 웨이크워드 루프
+- 로봇 마이크 호출어: 로봇 측 `assistant_audio` 노드
+- 일정/스케줄 입력: `assistant_robot/nodes/scheduler_node.py`
+- GUI 직접 안내 버튼: GUI direct navigation client
+- 텍스트 명령: `/assistant/command_text`
 
-# AI/ML (대규모 모델, 이미 설치됨)
-# pip install tensorflow==2.15.1 torch==2.11.0 torchvision==0.26.0
-```
+### 2-3. 상태 축
 
-### 2-5) NumPy 호환성 주의
+상태는 두 축으로 나뉜다.
 
-- **mediapipe + NumPy 2.x 호환성 문제**: NumPy를 1.x 로 유지
-  ```bash
-  pip install 'numpy<2.0'
-  ```
-- 설치 후 환경 확인:
-  ```bash
-  python3 -c "import import mediapipe; print(mediapipe.__version__)"
-  ```
+- 대화/입력 상태: `LISTENING`, `PROCESSING`, `RESPONDING` 등
+- 작업/로봇 상태: `IDLE`, `EXECUTING`, `WAITING_CONFIRMATION`, `CHARGING` 등
 
-## 3) 필수 ROS 2 패키지 (apt)
+작업 상태는 `assistant_robot/orchestrator/state_machine.py`에서 관리한다.
 
-### 3-1) 기본 메시지/서비스 타입
+### 2-4. 확인 임무 로직
 
-```bash
-sudo apt update
-sudo apt install -y \
-  ros-humble-nav2-msgs \
-  ros-humble-geometry-msgs \
-  ros-humble-std-msgs \
-  ros-humble-std-srvs \
-  ros-humble-launch \
-  ros-humble-launch-ros \
-  ros-humble-sensor-msgs \
-  ros-humble-nav-msgs \
-  ros-humble-control-msgs \
-  ros-humble-diagnostics
-```
+배달, 복약, 알람은 공통적으로 다음 순서를 따른다.
 
-### 3-2) 선택 설치 (특정 기능)
+1. 목적지 안내 시작
+2. 목적지 도착
+3. `WAITING_CONFIRMATION` 상태 진입
+4. GUI 확인 페이지 표시
+5. OK 제스처 또는 수동 OK 버튼으로 확인 완료
+6. 현재 위치에서 임무 종료 후 idle 복귀
 
-```bash
-# TurtleBot 3 패키지 (로봇 사용 시)
-sudo apt install -y \
-  ros-humble-turtlebot3 \
-  ros-humble-turtlebot3-msgs \
-  ros-humble-dynamixel-sdk
+현재는 확인 완료 후 자동 home 복귀를 하지 않는다.
 
-# 고급 네비게이션 (경로 계획/SLAM)
-sudo apt install -y \
-  ros-humble-nav2-core \
-  ros-humble-slam-toolbox \
-  ros-humble-cartographer
-```
-
-### 3-3) 설치 확인
-
-```bash
-ros2 pkg list | grep -E "geometry_msgs|nav2_msgs|std_msgs"
-```
-
-## 4) API 키 보안 관리 (공용 시크릿 1개)
-
-실제 키는 코드/깃에 넣지 않고 로컬 공용 시크릿 파일 1개에서 관리합니다.
-
-- 공용 시크릿 파일 경로: `~/.config/assistant/secrets.json`
-- 예시 파일: `secrets.example.json`
-- 이 파일은 프로젝트 폴더 안이 아니라 각자 PC의 홈 디렉터리 아래에 만들어야 합니다.
-
-설정 방법:
-
-```bash
-mkdir -p ~/.config/assistant
-cp secrets.example.json ~/.config/assistant/secrets.json
-```
-
-로컬에서 바로 생성하고 편집까지 여는 명령:
-
-```bash
-mkdir -p ~/.config/assistant \
-  && cp /home/mythos/assistant_ws/src/assistant/secrets.example.json ~/.config/assistant/secrets.json \
-  && ${EDITOR:-nano} ~/.config/assistant/secrets.json
-```
-
-예시 내용을 한 번에 생성하려면:
-
-```bash
-mkdir -p ~/.config/assistant
-cat > ~/.config/assistant/secrets.json <<'EOF'
-{
-  "weather_api_key": "",
-  "elevenlabs_api_key": "",
-  "elevenlabs_voice_id": "",
-  "cartesia_api_key": "",
-  "cartesia_voice_id": ""
-}
-EOF
-${EDITOR:-nano} ~/.config/assistant/secrets.json
-```
-
-필수 키 항목:
-
-- `weather_api_key`
-- `elevenlabs_api_key`
-- `elevenlabs_voice_id`
-- `cartesia_api_key`
-- `cartesia_voice_id`
-
-환경변수 연결:
-
-```bash
-export ASSISTANT_SECRETS_FILE=~/.config/assistant/secrets.json
-```
-
-API 발급 링크:
-
-- KMA 날씨 API: https://www.data.go.kr/data/15084084/openapi.do
-- ElevenLabs API: https://elevenlabs.io/app/settings/api-keys
-- Cartesia API: https://play.cartesia.ai/
-
-## 5) 패키지/디렉토리 구조 설명
+## 3. 패키지 역할
 
 ### `assistant_audio`
 
-- 역할: Wake word, STT, TTS 파이프라인
-- 주요 디렉토리:
-  - `assistant_audio/input_providers`: 입력 소스(버튼/텍스트)
-  - `assistant_audio/providers`: STT/TTS 백엔드 구현
-  - `assistant_audio/tools`: 로컬 테스트 CLI
-  - `assistant_audio/stt_node.py`, `assistant_audio/tts_node.py`, `assistant_audio/wake_word_node.py`: ROS2 노드 엔트리
+- wake word
+- STT
+- TTS
+- 로봇/PC 오디오 입출력 토픽 관리
 
 ### `assistant_brain`
 
-- 역할: 대화/의도 라우팅 및 상태 흐름 제어
-- 주요 디렉토리:
-  - `assistant_brain/handlers`: 명령 핸들러(정보/모션/네비/작업)
-  - `assistant_brain/tools`: 스텁/보조 실행 도구
-  - `dialog_manager_node.py`, `intent_router_node.py`: 핵심 노드
-
-### `assistant_bringup`
-
-- 역할: 런치 및 설정 묶음
-- 주요 디렉토리:
-  - `launch`: 실행 시나리오별 launch 파일
-  - `config`: 노드 파라미터 yaml
-  - `assistant_bringup/tools`: 라이브 음성 스텁 CLI
+- 대화 상태
+- 의도 라우팅
+- 명령 해석 흐름
 
 ### `assistant_commands`
 
-- 역할: 음성 명령 정규화/스키마/동의어 처리
-- 주요 디렉토리:
-  - `assistant_commands/command_schema.py`: 표준 명령 모델
-  - `assistant_commands/command_normalizer.py`, `llm_normalizer.py`: 명령 정규화
-  - `assistant_commands/command_executor.py`: 실행 연결부
+- 명령 스키마
+- 정규화
+- intent 관련 공통 모델
 
 ### `assistant_gui`
 
-- 역할: 대시보드, 지도, 상태 표시, 사용자 인터랙션
-- 주요 디렉토리:
-  - `assistant_gui/pages`: 홈/일정/설정/유틸/음성/날씨 페이지
-  - `assistant_gui/engines`: 날씨/배터리/OCR/알람/스케줄 엔진
-  - `assistant_gui/face`: 표정 렌더링/상태/애니메이션
-  - `assistant_gui/integrations`: ROS 상태 브리지
-  - `assistant_gui/map_view.py`, `assistant_gui/path_planner.py`: 지도 및 경로 표시
+- 대시보드
+- 지도/경로 표시
+- 직접 안내 버튼
+- 제스처 확인 화면
+- 로컬 음성 루프
+- 설정/일정/알람/복약 UI
 
 ### `assistant_interfaces`
 
-- 역할: 프로젝트 공통 메시지/서비스/액션 인터페이스
-- 주요 디렉토리:
-  - `msg`: 커스텀 메시지
-  - `srv`: 서비스 정의
-  - `action`: 액션 정의
+- ROS 2 msg / srv / action 정의
 
 ### `assistant_robot`
 
-- 역할: 로봇측 오케스트레이션, 임무 큐, 실행기, 안전 로직
-- 주요 디렉토리:
-  - `assistant_robot/nodes`: ROS2 노드 엔트리
-  - `assistant_robot/orchestrator`: 큐/디스패처/상태머신
-  - `assistant_robot/executors`: 임무별 실행기
-  - `assistant_robot/adapters`: 실제/모의 어댑터
-  - `assistant_robot/services`: TTS/스케줄/인사 등 서비스 계층
-  - `assistant_robot/models`: 도메인 모델
+- 오케스트레이터
+- 작업 큐
+- 상태머신
+- 배달/복약/알람/복귀 executor
+- nav bridge
+- cmd_vel adapter
+- 사람 인식
 
-## 6) 빌드/실행
+### `assistant_bringup`
 
-### 6-1) 빌드
+- launch 파일
+- 파라미터 yaml
+- named place / nav2 config
+
+## 4. 권장 운영 구성
+
+현재 최종본 기준 권장 운영 방식은 `분산 실행`이다.
+
+### PC에서 실행
+
+- GUI
+- orchestrator
+- nav bridge
+- scheduler
+- Nav2 bringup
+- RViz(optional)
+
+### TurtleBot에서 실행
+
+- TurtleBot base bringup
+- robot wake word / STT / TTS
+- cmd_vel adapter
+- person recognition(optional)
+
+현재 권장 launch는 `assistant_bringup/launch/assistant_production.launch.py`다.
+
+## 5. PC / TurtleBot 패키지 분리
+
+## PC에 있어야 하는 패키지
+
+권장: 전체 저장소 그대로 사용
+
+최소 실행 세트:
+
+- `assistant_interfaces`
+- `assistant_commands`
+- `assistant_brain`
+- `assistant_audio`
+- `assistant_robot`
+- `assistant_gui`
+- `assistant_bringup`
+
+이유:
+
+- GUI가 메인 운영 화면이다.
+- orchestrator와 nav bridge가 PC에서 실행된다.
+- distributed production launch가 PC 측에서 `assistant_robot` 노드를 실행한다.
+
+## TurtleBot에 옮겨야 하는 패키지
+
+분산 운영 최소 세트:
+
+- `assistant_interfaces`
+- `assistant_commands`
+- `assistant_audio`
+- `assistant_robot`
+- `assistant_bringup`
+
+보통 TurtleBot에는 `assistant_gui`, `assistant_brain`은 필수가 아니다.
+
+## 6. 필수 환경
+
+- Ubuntu 22.04
+- ROS 2 Humble
+- Python 3.10
+- `colcon`
+- TurtleBot3 / Nav2 사용 환경
+
+### Python 호환성 고정
+
+현재 제스처/MediaPipe 안정성 기준 권장 버전:
 
 ```bash
-cd /home/omnimate/OmniMate_ws
-colcon build --base-paths src/assistant --symlink-install
+pip install 'numpy<2.0'
+pip install protobuf==4.25.3
+```
+
+현재 확인된 제스처 조합:
+
+- `mediapipe==0.10.9`
+- `numpy==1.26.4`
+- `protobuf==4.25.3`
+
+## 7. 빌드
+
+저장소 루트에서 빌드한다.
+
+```bash
+cd /home/omnimate/OmniMate_ws/assistant/OmniMate_Team_Project
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 6-2) 빌드 검증
+부분 빌드 예시:
 
 ```bash
-# 설치된 패키지 확인
-ros2 pkg list | grep assistant
-
-# Python 패키지 임포트 확인
-python3 -c "import assistant_gui; import assistant_audio; import assistant_brain; print('All imports OK')"
-
-# 마이크/오디오 확인
-arecord -l
+colcon build --symlink-install --packages-select assistant_gui
+colcon build --symlink-install --packages-select assistant_robot assistant_bringup assistant_gui
 ```
 
-### 6-3) 개별 노드 실행
+## 8. 실행 방법
 
-**Audio 파이프라인:**
-```bash
-# Wake word 감지
-ros2 run assistant_audio wake_word_node
+### 8-1. 단일 PC 테스트
 
-# STT (음성 인식)
-ros2 run assistant_audio stt_node
-
-# TTS (음성 합성)
-ros2 run assistant_audio tts_node
-
-# 로컬 테스트 (마이크)
-ros2 run assistant_audio mic_stt_test
-```
-
-**Brain (대화/의도):**
-```bash
-# 의도 라우팅
-ros2 run assistant_brain intent_router_node
-
-# 대화 관리
-ros2 run assistant_brain dialog_manager_node
-```
-
-**GUI (대시보드):**
-```bash
-# 메인 GUI
-ros2 run assistant_gui assistant_gui_node
-```
-
-**Robot (임무 오케스트레이션):**
-```bash
-# 로봇 오케스트레이터 (배달/내비게이션)
-ros2 run assistant_robot omni_orchestrator_node
-```
-
-### 6-4) 통합 실행 (Launch 파일)
+로컬에서 GUI + brain + robot core를 한 PC에서 간단히 확인할 때:
 
 ```bash
-# 전체 시스템
-ros2 launch assistant_bringup complete.launch.xml
-
-# GUI + Audio 만
-ros2 launch assistant_bringup gui_audio.launch.xml
-
-# 음성 테스트 모드
-ros2 launch assistant_bringup voice_test.launch.xml
-```
-
-## 7) 런타임 환경변수(자주 쓰는 항목)
-
-- `ASSISTANT_SECRETS_FILE`: 공용 시크릿 파일 경로
-- `ASSISTANT_ENABLE_ROS_BRIDGE`: GUI에서 ROS 브리지 활성화 (`1/true`)
-- `ASSISTANT_FACE_VOICE_LOOP`: GUI 음성 루프 활성화 (`1/true`)
-- `ASSISTANT_VOICE_ONLY_FACE_MODE`: 음성 전용 얼굴 화면 고정 모드 (`1/true`)
-- `ASSISTANT_ROBOT_IP`: GUI/PC가 붙을 원격 로봇 IP. 미지정 시 현재 기본값은 `192.168.96.23`
-- `ASSISTANT_TURTLEBOT_IP`: 기존 호환용 로봇 IP 이름. 없으면 `ASSISTANT_ROBOT_IP`를 우선 사용
-
-## 8) 트러블슈팅
-
-### 8-1) 음성 인식 (STT) 문제
-
-**증상:** "speech_recognition 패키지가 없어 음성 인식을 실행할 수 없습니다"
-```bash
-# 해결
-pip install SpeechRecognition vosk google-cloud-speech
-```
-
-**증상:** 마이크가 감지되지 않음
-```bash
-# 마이크 장치 확인
-arecord -l
-
-# 시스템 오디오 테스트
-arecord -f dat test.wav && aplay test.wav
-
-# pyaudio 설치 (시스템 권한 필요)
-sudo apt install python3-pyaudio portaudio19-dev
-```
-
-### 8-2) mediapipe 호환성 문제
-
-**증상:** `ImportError: cannot import name '_ARRAY_API'` 또는 `numpy.core.multiarray not found`
-```bash
-# NumPy 버전 고정
-pip install 'numpy<2.0'
-```
-
-### 8-3) GUI 시작 오류
-
-**증상:** `ModuleNotFoundError: No module named 'PySide6'`
-```bash
-# PySide6와 의존성 재설치
-pip install PySide6==6.11.0
-pip install --upgrade --force-reinstall PySide6
-```
-
-**증상:** GUI 창이 안 나타짐 (X11 / 원격 디스플레이)
-```bash
-# X11 권한 확인
-echo $DISPLAY
-
-# 필요시 명시
-export DISPLAY=:0
-```
-
-### 8-4) ROS 2 빌드 오류
-
-**증상:** `Package 'ament_cmake_python' not found`
-```bash
-# ROS 2 환경 재로드
+cd /home/omnimate/OmniMate_ws/assistant/OmniMate_Team_Project
 source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch assistant_bringup assistant_core.launch.py
 ```
 
-**증상:** `colcon: command not found`
-```bash
-# colcon 설치
-sudo apt install python3-colcon-common-extensions
-```
+이 모드는 로컬 통합 테스트용이다. 실제 TurtleBot 분산 운영 기본 경로는 아니다.
 
-### 8-5) 환경변수 확인
+### 8-2. 권장 분산 운영
 
-```bash
-# 모든 환경변수 확인
-env | grep ASSISTANT
-
-# 특정 변수
-echo $ASSISTANT_SECRETS_FILE
-echo $ASSISTANT_ROBOT_IP
-```
-
-### 8-6) 설치 검증 스크립트
+#### PC
 
 ```bash
-#!/bin/bash
-echo "=== OmniMate Assistant 설치 검증 ==="
+cd /home/omnimate/OmniMate_ws/assistant/OmniMate_Team_Project
+source /opt/ros/humble/setup.bash
+source install/setup.bash
 
-echo "[1] Python 패키지 확인..."
-python3 -c "
-import sys
-packages = ['PySide6', 'rclpy', 'requests', 'PyYAML', 'opencv_cv2', 'numpy', 
-           'mediapipe', 'speech_recognition', 'edge_tts', 'vosk']
-missing = []
-for pkg in packages:
-    try:
-        __import__(pkg.replace('_', '-'))
-    except ImportError:
-        missing.append(pkg)
-if missing:
-    print(f'❌ 누락: {missing}')
-else:
-    print('✅ 모든 핵심 패키지 OK')
-"
+export ASSISTANT_SECRETS_FILE=~/.config/assistant/secrets.json
 
-echo "[2] ROS 2 패키지 확인..."
-ros2 pkg list | grep -q assistant_gui && echo "✅ assistant_gui OK" || echo "❌ assistant_gui 미설치"
-
-echo "[3] 마이크 확인..."
-arecord -l > /dev/null 2>&1 && echo "✅ 마이크 감지됨" || echo "❌ 마이크 미감지"
-
-echo "[4] 환경변수 확인..."
-[ -n "$ASSISTANT_SECRETS_FILE" ] && echo "✅ ASSISTANT_SECRETS_FILE 설정됨" || echo "⚠️  ASSISTANT_SECRETS_FILE 미설정"
-
-echo "=== 검증 완료 ==="
+ros2 launch assistant_bringup assistant_production.launch.py \
+  machine_role:=pc \
+  ros_domain_id:=142 \
+  ros_static_peers:=192.168.96.23 \
+  map:=/absolute/path/to/map.yaml \
+  nav2_params_file:=/absolute/path/to/nav2_burger_narrow.yaml \
+  enable_rviz:=false
 ```
 
-## 9) 문서/주석 정리 원칙
+#### TurtleBot
 
-- 공개 저장소 기준으로 민감정보(실키/토큰) 하드코딩 금지
-- 복잡한 로직에만 짧고 명확한 주석 유지
-- 테스트/빌드 산출물(`__pycache__`, `.pyc`, `.pytest_cache`) 커밋 금지
+```bash
+cd /home/omnimate/OmniMate_ws/assistant/OmniMate_Team_Project
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch assistant_bringup assistant_production.launch.py \
+  machine_role:=robot \
+  ros_domain_id:=142 \
+  ros_static_peers:=<PC_IP>
+```
+
+`assistant_production.launch.py`는 내부적으로 다음 구성을 사용한다.
+
+- PC: GUI + orchestrator + nav_bridge + scheduler + Nav2
+- TurtleBot: robot audio + TurtleBot base + cmd_vel adapter + person recognition
+
+## 9. TurtleBot로 패키지 옮기는 방법
+
+현재 최종본 기준으로 TurtleBot에는 아래 디렉토리만 옮기면 된다.
+
+- `assistant_interfaces/`
+- `assistant_commands/`
+- `assistant_audio/`
+- `assistant_robot/`
+- `assistant_bringup/`
+
+예시:
+
+```bash
+cd /home/omnimate/OmniMate_ws/assistant/OmniMate_Team_Project
+
+rsync -az assistant_interfaces/ user@<robot_ip>:~/OmniMate_Team_Project/assistant_interfaces/
+rsync -az assistant_commands/ user@<robot_ip>:~/OmniMate_Team_Project/assistant_commands/
+rsync -az assistant_audio/ user@<robot_ip>:~/OmniMate_Team_Project/assistant_audio/
+rsync -az assistant_robot/ user@<robot_ip>:~/OmniMate_Team_Project/assistant_robot/
+rsync -az assistant_bringup/ user@<robot_ip>:~/OmniMate_Team_Project/assistant_bringup/
+```
+
+TurtleBot에서 빌드:
+
+```bash
+cd ~/OmniMate_Team_Project
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select \
+  assistant_interfaces assistant_commands assistant_audio assistant_robot assistant_bringup
+source install/setup.bash
+```
+
+## 10. 현재 운영 기준 핵심 설정
+
+### 음성
+
+- 입력: PC 마이크
+- 출력: 로봇 스피커
+- GUI 저장 설정이 남아 있어도 시작 시 운영 모드에 맞게 다시 정렬된다.
+
+### 안내 / 도착 판정
+
+- GUI 도착 반경과 nav bridge proximity 반경은 현재 `0.10m`
+- named place는 기본적으로 각도 정렬 없이 위치 도착만 본다.
+
+### 확인 로직
+
+- 배송 / 복약 / 알람은 도착 후 확인 페이지를 띄운다.
+- OK 제스처가 불안정하면 수동 확인 버튼으로 완료 가능하다.
+- 확인 후 현재 위치에서 idle로 복귀한다.
+
+### 복귀 정책
+
+- idle 자동 home 복귀 없음
+- 배송 확인 후 자동 home 복귀 없음
+- 사용자가 명시적으로 복귀를 지시했을 때만 복귀
+
+## 11. 자주 쓰는 환경변수
+
+- `ASSISTANT_SECRETS_FILE`
+- `ASSISTANT_NAMED_PLACES_FILE`
+- `ASSISTANT_ENABLE_ROS_BRIDGE`
+- `ASSISTANT_FACE_VOICE_LOOP`
+- `ASSISTANT_VOICE_ONLY_FACE_MODE`
+- `ASSISTANT_NAV_REQUIRE_GOAL_ORIENTATION`
+- `ASSISTANT_RETURN_SKIP_DISTANCE_M`
+
+## 12. 트러블슈팅
+
+### 제스처 인식이 계속 실패할 때
+
+확인 순서:
+
+1. `mediapipe`, `numpy`, `protobuf` 버전 확인
+2. GUI 재실행
+3. `/image_raw/compressed` 토픽 수신 여부 확인
+4. 수동 OK 버튼으로 확인 경로 자체가 정상인지 확인
+
+권장 버전:
+
+```bash
+pip install 'numpy<2.0'
+pip install protobuf==4.25.3
+```
+
+### 확인창이 안 뜰 때
+
+확인창은 도착 후 `WAITING_CONFIRMATION` 상태에서만 뜬다. 따라서 다음을 먼저 봐야 한다.
+
+- 목표점까지 실제로 도착했는가
+- Nav2가 near-goal abort를 내지 않았는가
+- named place 좌표가 벽/협소 구역에 너무 붙어 있지 않은가
+- 목적지 각도 정렬이 불필요하게 요구되지 않는가
+
+### ROS 통신이 안 될 때
+
+PC와 TurtleBot 둘 다 아래를 맞춘다.
+
+```bash
+export ROS_DOMAIN_ID=142
+export ROS_LOCALHOST_ONLY=0
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+```
+
+## 13. 추가 운영 문서
+
+배포 패키지, 실행 순서, rsync 예시, 점검 체크리스트는 아래 문서를 본다.
+
+- `docs/DEPLOYMENT.md`

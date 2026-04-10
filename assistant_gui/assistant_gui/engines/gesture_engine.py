@@ -5,11 +5,7 @@ import os
 
 import cv2
 import mediapipe as mp
-
-try:
-    from assistant_gui.engines.gpu_vision import bgr_to_rgb, horizontal_flip
-except ModuleNotFoundError:
-    from engines.gpu_vision import bgr_to_rgb, horizontal_flip
+import numpy as np
 
 try:
     from assistant_gui.engines.ros_camera_capture import RosCameraCapture
@@ -46,6 +42,7 @@ class GestureEngine(threading.Thread):
         self.last_gesture = "인식 대기 중"
         self._ok_frame_count = 0
         self._ok_hold_frames = int(os.getenv("ASSISTANT_GESTURE_OK_HOLD_FRAMES", "5") or "5")
+        self._last_process_error = ""
 
     def _try_open(self, source, name):
         if isinstance(source, str) and source.startswith("ros:"):
@@ -155,19 +152,27 @@ class GestureEngine(threading.Thread):
             if not ret:
                 continue
 
-            frame = horizontal_flip(frame)
+            frame = cv2.flip(frame, 1)
             current_gesture = "인식 대기 중"
 
             if self.has_gesture_support and self.hands is not None:
                 try:
-                    rgb_frame = bgr_to_rgb(frame)
+                    # MediaPipe Hands is more stable with a standard contiguous CPU RGB array.
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    rgb_frame = np.ascontiguousarray(rgb_frame)
+                    rgb_frame.flags.writeable = False
                     results = self.hands.process(rgb_frame)
-                except Exception:
+                except Exception as exc:
+                    error_message = f"{type(exc).__name__}: {exc}"
+                    if error_message != self._last_process_error:
+                        print(f"[GestureEngine] MediaPipe process failed: {error_message}")
+                        self._last_process_error = error_message
                     self._ok_frame_count = 0
                     self.last_gesture = "제스처 인식 오류 (수동 확인 버튼 사용)"
                     self.callback(frame, self.last_gesture)
                     time.sleep(0.03)
                     continue
+                self._last_process_error = ""
                 if results.multi_hand_landmarks:
                     for hand_landmarks in results.multi_hand_landmarks:
                         detected = self.classify_hand(hand_landmarks)

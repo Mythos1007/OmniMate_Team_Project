@@ -56,7 +56,7 @@ class HomePage(QWidget):
         self._speed_samples: deque[float] = deque(maxlen=8)
         self._active_navigation_label = ""
         self._active_navigation_meta: dict[str, object] = {}
-        self._arrival_distance_threshold_m = 0.22
+        self._arrival_distance_threshold_m = 0.10
         self._pending_navigation_queue: deque[dict[str, object]] = deque()
         self._navigation_stop_requested = False
         self._queue_resume_token = 0
@@ -552,6 +552,15 @@ class HomePage(QWidget):
 
     def has_navigation_activity(self) -> bool:
         return self._has_active_navigation() or bool(self._pending_navigation_queue)
+
+    def clear_navigation_activity(self, *, clear_queue: bool = False) -> None:
+        self.map_view.clear_route_path()
+        self._active_navigation_label = ""
+        self._active_navigation_meta = {}
+        self._speed_samples.clear()
+        self.st_eta.setText("")
+        if clear_queue:
+            self._pending_navigation_queue.clear()
 
     def _stop_navigation(self) -> None:
         if not self._has_active_navigation() and not self._pending_navigation_queue:

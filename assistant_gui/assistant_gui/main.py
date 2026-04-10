@@ -371,6 +371,8 @@ class OmniMateMain(QMainWindow):
         self._startup_audio_sync_max_attempts = 12
         self._last_robot_tts_config_payload = ""
         self._last_robot_tts_config_sent_at = 0.0
+        self._pending_direct_navigation_timer = None
+        self._pending_direct_navigation_target = ""
         self._require_goal_orientation = str(
             self._settings.value(
                 "navigation/require_goal_orientation",
@@ -554,15 +556,10 @@ class OmniMateMain(QMainWindow):
         edge_voice = str(self._settings.value("voice/edge_voice", self._default_edge_voice))
         wakeword_reply_only = str(self._settings.value("voice/wakeword_reply_only", "true" if self._wakeword_reply_only else "false"))
         robot_speaker_volume = int(self._settings.value("voice/robot_speaker_volume", self._robot_speaker_volume))
-        pc_local_voice_enabled = str(self._settings.value("voice/pc_local_voice_enabled", "true" if self._face_voice_loop_enabled else "false"))
-        robot_voice_input_enabled = str(self._settings.value("voice/robot_voice_input_enabled", "true" if self._robot_voice_input_enabled else "false"))
         self.apply_default_voice_backend(voice_backend, publish=False)
         self.apply_default_edge_voice(edge_voice, publish=False)
         self.apply_wakeword_reply_only(wakeword_reply_only)
-        if not self.is_microphone_available():
-            pc_local_voice_enabled = "false"
-        self.apply_pc_local_voice_enabled(pc_local_voice_enabled)
-        self.apply_robot_voice_input_enabled(robot_voice_input_enabled, publish=False)
+        self._apply_preferred_wakeword_audio_mode()
         self.apply_person_greeting_enabled(
             str(self._settings.value("behavior/person_greeting_enabled", "true" if self._person_greeting_enabled else "false")),
             publish=False,
@@ -573,6 +570,11 @@ class OmniMateMain(QMainWindow):
         height = int(self._settings.value("window/height", 1080))
         self.apply_window_size(width, height)
         self._pref_fullscreen = str(self._settings.value("window/fullscreen", "false")).lower() in {"1", "true", "yes"}
+
+    def _apply_preferred_wakeword_audio_mode(self) -> None:
+        prefer_pc_local_voice = self.is_microphone_available()
+        self.apply_pc_local_voice_enabled(prefer_pc_local_voice)
+        self.apply_robot_voice_input_enabled(False, publish=False)
 
     def apply_theme(self, theme: str) -> None:
         theme = "dark" if theme == "dark" else "light"
@@ -1058,6 +1060,10 @@ class OmniMateMain(QMainWindow):
     def cancel_active_navigation(self) -> tuple[bool, str]:
         messages: list[str] = []
 
+        if self._cancel_pending_direct_navigation_dispatch():
+            messages.append("직접 안내 시작 예약을 취소했습니다.")
+            return True, " | ".join(messages)
+
         command_client = self._get_ros_command_client()
         if command_client is not None:
             direct_ok, direct_message = command_client.cancel_active_guide_goals()
@@ -1151,13 +1157,42 @@ class OmniMateMain(QMainWindow):
                 print(f"[OmniMateMain] navigation announcement publish failed: {speak_message}")
             effective_delay_ms = max(effective_delay_ms, self._estimate_navigation_tts_wait_ms(announcement_text))
 
+        self._cancel_pending_direct_navigation_dispatch()
+        self._pending_direct_navigation_target = name
+
         def _dispatch_goal() -> None:
+            self._clear_pending_direct_navigation_dispatch()
             ok, message = command_client.send_guide_goal(name)
             if not ok:
                 print(f"[OmniMateMain] direct navigation failed: {message}")
 
-        QTimer.singleShot(effective_delay_ms, _dispatch_goal)
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(_dispatch_goal)
+        self._pending_direct_navigation_timer = timer
+        timer.start(effective_delay_ms)
         return True, "ok"
+
+    def _cancel_pending_direct_navigation_dispatch(self) -> bool:
+        timer = getattr(self, "_pending_direct_navigation_timer", None)
+        if timer is None:
+            return False
+        if not timer.isActive():
+            self._clear_pending_direct_navigation_dispatch()
+            return False
+        timer.stop()
+        self._clear_pending_direct_navigation_dispatch()
+        return True
+
+    def _clear_pending_direct_navigation_dispatch(self) -> None:
+        timer = getattr(self, "_pending_direct_navigation_timer", None)
+        self._pending_direct_navigation_timer = None
+        self._pending_direct_navigation_target = ""
+        if timer is not None:
+            try:
+                timer.deleteLater()
+            except Exception:
+                pass
 
     @staticmethod
     def _estimate_navigation_tts_wait_ms(announcement_text: str) -> int:
@@ -1213,6 +1248,51 @@ class OmniMateMain(QMainWindow):
         except Exception:
             pass
         return self.home_page.map_view.get_path_length_m()
+
+    @staticmethod
+    def _return_skip_distance_m() -> float:
+        configured = os.getenv("ASSISTANT_RETURN_SKIP_DISTANCE_M", "0.35").strip()
+        try:
+            return max(0.0, float(configured))
+        except ValueError:
+            return 0.35
+
+    def _distance_to_named_place_m(self, place_name: str) -> float | None:
+        if not hasattr(self, 'home_page'):
+            return None
+        pose = getattr(self.home_page, '_last_pose', None)
+        if pose is None or len(pose) != 2:
+            return None
+
+        place = self.get_named_place_lookup().get(str(place_name or '').strip())
+        if not isinstance(place, dict):
+            return None
+
+        try:
+            robot_x, robot_y = float(pose[0]), float(pose[1])
+            place_x = float(place.get('x', 0.0))
+            place_y = float(place.get('y', 0.0))
+        except (TypeError, ValueError):
+            return None
+
+        return math.hypot(place_x - robot_x, place_y - robot_y)
+
+    def _clear_home_navigation_context(self) -> None:
+        if not hasattr(self, 'home_page') or self.home_page is None:
+            return
+        if hasattr(self.home_page, 'clear_navigation_activity'):
+            self.home_page.clear_navigation_activity(clear_queue=False)
+
+    def _finalize_mail_return_home(self) -> None:
+        self._clear_home_navigation_context()
+        if hasattr(self, 'home_page'):
+            self.home_page.st_main.setText('대기 중...')
+            self.home_page.st_sub.setText('명령을 기다리고 있습니다.')
+            self.home_page.st_eta.setText('')
+        self.switch_page(1, manual=True)
+        self._mail_returning_home = False
+        self._mail_confirmation_pending = False
+        self._pending_mail_delivery_target = ''
 
     def _write_named_place_document(self, document: dict) -> None:
         config_path = ROBOT_NAMED_PLACE_CONFIG
@@ -2194,14 +2274,7 @@ class OmniMateMain(QMainWindow):
                 self.gesture_page.set_target(target)
             self.switch_page(12, manual=True)
         elif state == 'IDLE' and self._mail_returning_home:
-            if hasattr(self, 'home_page'):
-                self.home_page.st_main.setText("복귀 완료")
-                self.home_page.st_sub.setText("대기 위치로 복귀했습니다.")
-            self.publish_tts_to_robot("대기 위치로 복귀했습니다.")
-            self.switch_page(1, manual=True)
-            self._mail_returning_home = False
-            self._mail_confirmation_pending = False
-            self._pending_mail_delivery_target = ""
+            self._finalize_mail_return_home()
         elif state == 'IDLE' and getattr(self, '_pending_mail_delivery_target', '') and not self._mail_confirmation_pending:
             target = str(getattr(self, '_pending_mail_delivery_target', '')).strip()
             if target and hasattr(self, 'home_page'):
@@ -2433,6 +2506,13 @@ class OmniMateMain(QMainWindow):
         home_place = self._resolve_home_place_name()
         if not home_place:
             return False, 'home 장소 설정을 찾지 못했습니다.'
+
+        near_home_distance = self._distance_to_named_place_m(home_place)
+        if near_home_distance is not None and near_home_distance <= self._return_skip_distance_m():
+            self._mail_returning_home = False
+            self._clear_home_navigation_context()
+            return True, f'이미 대기 위치 근처({near_home_distance:.2f}m)라 복귀를 생략합니다.'
+
         ok, message = self.start_direct_navigation_to_named_place(
             home_place,
             announcement_text='대기 위치로 복귀를 시작합니다.',
@@ -2454,11 +2534,8 @@ class OmniMateMain(QMainWindow):
     def confirm_mail_delivery_and_return_home(self) -> tuple[bool, str]:
         ok, message = self.publish_confirmation_signal()
         self._mail_confirmation_pending = False
-        home_ok, home_message = self.begin_mail_return_home()
-        if not home_ok:
-            if not ok:
-                return False, f'전달 확인 신호 전송 실패({message}) 및 홈 복귀 명령 전송 실패({home_message})'
-            return False, f'전달 확인은 완료했지만 홈 복귀 명령 전송에 실패했습니다: {home_message}'
+        self._mail_returning_home = False
+        self._clear_home_navigation_context()
         if not ok:
             return True, f'전달 확인 신호 전송 실패(경고): {message}'
         return True, 'ok'
